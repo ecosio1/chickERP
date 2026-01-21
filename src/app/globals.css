@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Warm, friendly color palette */
+    --background: 30 50% 98%;
+    --foreground: 20 20% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 20% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 20% 20%;
+
+    /* Warm orange primary - friendly and inviting */
+    --primary: 25 95% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Soft warm secondary */
+    --secondary: 35 30% 93%;
+    --secondary-foreground: 20 20% 30%;
+
+    /* Muted warm tones */
+    --muted: 30 20% 94%;
+    --muted-foreground: 20 10% 45%;
+
+    /* Warm accent */
+    --accent: 45 90% 88%;
+    --accent-foreground: 25 80% 35%;
+
+    /* Friendly destructive (softer red) */
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 30 20% 88%;
+    --input: 30 20% 88%;
+    --ring: 25 95% 55%;
+    --radius: 0.75rem;
+
+    /* Status colors - softer, friendlier */
+    --success: 145 60% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 45 90% 50%;
+    --warning-foreground: 30 80% 20%;
+    --info: 200 80% 50%;
+    --info-foreground: 0 0% 100%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Larger touch targets for accessibility */
+  button,
+  [role="button"],
+  input[type="submit"],
+  input[type="button"],
+  a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Improved focus states */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2;
+  }
+}
+
+@layer components {
+  /* Large, friendly buttons */
+  .btn-large {
+    @apply h-14 px-8 text-lg font-medium rounded-xl;
+  }
+
+  /* Card with warm shadow */
+  .card-warm {
+    @apply bg-card rounded-2xl shadow-lg shadow-orange-100/50 border border-orange-100;
+  }
+
+  /* Status badges */
+  .badge-success {
+    @apply bg-green-100 text-green-700 border-green-200;
+  }
+
+  .badge-warning {
+    @apply bg-amber-100 text-amber-700 border-amber-200;
+  }
+
+  .badge-error {
+    @apply bg-red-100 text-red-700 border-red-200;
+  }
+
+  .badge-info {
+    @apply bg-blue-100 text-blue-700 border-blue-200;
+  }
+
+  /* Sex indicator colors */
+  .sex-male {
+    @apply bg-blue-100 text-blue-700;
+  }
+
+  .sex-female {
+    @apply bg-pink-100 text-pink-700;
+  }
+
+  .sex-unknown {
+    @apply bg-gray-100 text-gray-600;
+  }
+}
+
+/* Smooth page transitions */
+.page-transition {
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom scrollbar for webkit browsers */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.3);
+}

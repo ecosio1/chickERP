@@ -1,0 +1,615 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============== USER MANAGEMENT ==============
+
+enum UserRole {
+  OWNER
+  WORKER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String
+  role          UserRole  @default(WORKER)
+  language      String    @default("en") // en, tl (Tagalog)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  birdsCreated      Bird[]            @relation("BirdCreator")
+  eggRecords        EggRecord[]
+  weightRecords     WeightRecord[]
+  vaccinations      Vaccination[]
+  healthIncidents   HealthIncident[]
+  medications       Medication[]
+  feedConsumptions  FeedConsumption[]
+  birdNotes         BirdNote[]
+
+  @@map("users")
+}
+
+// ============== BIRD MANAGEMENT ==============
+
+enum BirdSex {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum BirdStatus {
+  ACTIVE
+  SOLD
+  DECEASED
+  CULLED
+  LOST
+  BREEDING
+  RETIRED
+  ARCHIVED
+}
+
+enum CombType {
+  SINGLE      // Straight comb
+  PEA         // Pea comb
+  ROSE        // Rose comb
+  WALNUT      // Walnut comb
+  BUTTERCUP   // Buttercup comb
+  V_SHAPED    // V-shaped comb
+  CUSHION     // Cushion comb
+}
+
+// Bird colors (configurable by user)
+model BirdColor {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  nameTl      String?   @map("name_tl")
+  hexCode     String?   @map("hex_code")  // Optional hex color for display
+  description String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  birds       Bird[]
+
+  @@map("bird_colors")
+}
+
+model Bird {
+  id            String      @id @default(cuid())
+  name          String?     // Optional nickname
+  sex           BirdSex
+  hatchDate     DateTime    @map("hatch_date")
+  status        BirdStatus  @default(ACTIVE)
+
+  // Physical characteristics
+  colorId       String?     @map("color_id")
+  color         BirdColor?  @relation(fields: [colorId], references: [id])
+  combType      CombType?   @map("comb_type")
+
+  // Early life observations (for tracking abnormalities)
+  earlyLifeNotes String?    @map("early_life_notes")
+
+  // Parentage (self-reference)
+  sireId        String?     @map("sire_id")
+  damId         String?     @map("dam_id")
+  sire          Bird?       @relation("Sire", fields: [sireId], references: [id])
+  dam           Bird?       @relation("Dam", fields: [damId], references: [id])
+
+  // Offspring relations
+  offspringAsSire Bird[]    @relation("Sire")
+  offspringAsDam  Bird[]    @relation("Dam")
+
+  // Current location
+  coopId        String?     @map("coop_id")
+  coop          Coop?       @relation(fields: [coopId], references: [id])
+
+  // Breed composition stored as JSON
+  // Format: [{ breedId: "xxx", percentage: 50 }, ...]
+  breedComposition Json?    @map("breed_composition")
+
+  // Manual override for breed calculation
+  breedOverride Boolean     @default(false) @map("breed_override")
+
+  // Metadata
+  createdById   String      @map("created_by")
+  createdBy     User        @relation("BirdCreator", fields: [createdById], references: [id])
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  // Related records
+  identifiers       BirdIdentifier[]
+  photos            BirdPhoto[]
+  notes             BirdNote[]
+  eggRecords        EggRecord[]
+  weightRecords     WeightRecord[]
+  vaccinations      VaccinationBird[]
+  healthIncidents   HealthIncidentBird[]
+  medications       MedicationBird[]
+  coopAssignments   CoopAssignment[]
+
+  // Egg as chick (result of incubation)
+  hatchedFromEgg    IncubationRecord?  @relation("HatchedChick")
+
+  // Conditioning and fight records (sabong)
+  exerciseRecords   ExerciseRecord[]
+  fightRecords      FightRecord[]
+
+  // Manual offspring count override
+  offspringOverride OffspringCountOverride?
+
+  @@index([sireId])
+  @@index([damId])
+  @@index([coopId])
+  @@index([colorId])
+  @@index([status])
+  @@index([hatchDate])
+  @@map("birds")
+}
+
+// Custom identification system - multiple IDs per bird
+model BirdIdentifier {
+  id          String    @id @default(cuid())
+  birdId      String    @map("bird_id")
+  bird        Bird      @relation(fields: [birdId], references: [id], onDelete: Cascade)
+  idType      String    @map("id_type")  // LEG_COLOR, LEG_NUMBER, WING_BAND, RFID, CUSTOM
+  idValue     String    @map("id_value")
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([birdId, idType]) // One of each type per bird
+  @@index([idValue])
+  @@index([idType, idValue])
+  @@map("bird_identifiers")
+}
+
+model BirdPhoto {
+  id          String    @id @default(cuid())
+  birdId      String    @map("bird_id")
+  bird        Bird      @relation(fields: [birdId], references: [id], onDelete: Cascade)
+  filename    String
+  url         String
+  isPrimary   Boolean   @default(false) @map("is_primary")
+  caption     String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("bird_photos")
+}
+
+model BirdNote {
+  id          String    @id @default(cuid())
+  birdId      String    @map("bird_id")
+  bird        Bird      @relation(fields: [birdId], references: [id], onDelete: Cascade)
+  content     String
+  createdById String    @map("created_by")
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("bird_notes")
+}
+
+// ============== BREED MANAGEMENT ==============
+
+model Breed {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  code        String    @unique // Short code like RIR, LEG, PLY
+  description String?
+  varieties   String[]  // Color varieties as array
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("breeds")
+}
+
+// ============== EGG & INCUBATION ==============
+
+enum ShellQuality {
+  GOOD
+  FAIR
+  POOR
+  SOFT
+}
+
+model EggRecord {
+  id              String        @id @default(cuid())
+  birdId          String        @map("bird_id")
+  bird            Bird          @relation(fields: [birdId], references: [id])
+  date            DateTime
+  eggMark         String?       @map("egg_mark") // Physical marking on egg
+  weightGrams     Float?        @map("weight_grams")
+  shellQuality    ShellQuality? @map("shell_quality")
+  eggSizeCategoryId String?     @map("egg_size_category_id") // User-defined size category
+  notes           String?
+  recordedById    String        @map("recorded_by")
+  recordedBy      User          @relation(fields: [recordedById], references: [id])
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  // If this egg was incubated
+  incubation    IncubationRecord?
+
+  @@index([birdId])
+  @@index([date])
+  @@map("egg_records")
+}
+
+enum IncubationOutcome {
+  PENDING
+  HATCHED
+  INFERTILE
+  DEAD_IN_SHELL
+  BROKEN
+}
+
+model IncubationRecord {
+  id              String              @id @default(cuid())
+  eggRecordId     String              @unique @map("egg_record_id")
+  eggRecord       EggRecord           @relation(fields: [eggRecordId], references: [id])
+  setDate         DateTime            @map("set_date")
+  expectedHatch   DateTime            @map("expected_hatch")
+  actualHatch     DateTime?           @map("actual_hatch")
+  outcome         IncubationOutcome   @default(PENDING)
+
+  // Link to resulting chick
+  chickId         String?             @unique @map("chick_id")
+  chick           Bird?               @relation("HatchedChick", fields: [chickId], references: [id])
+
+  notes           String?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  @@map("incubation_records")
+}
+
+// ============== WEIGHT TRACKING ==============
+
+enum WeightMilestone {
+  HATCH
+  WEEK_1
+  WEEK_2
+  WEEK_4
+  WEEK_6
+  WEEK_8
+  WEEK_12
+  WEEK_16
+  WEEK_20
+  ADULT
+  OTHER
+}
+
+model WeightRecord {
+  id            String            @id @default(cuid())
+  birdId        String            @map("bird_id")
+  bird          Bird              @relation(fields: [birdId], references: [id])
+  date          DateTime
+  weightGrams   Float             @map("weight_grams")
+  milestone     WeightMilestone?
+  notes         String?
+  recordedById  String            @map("recorded_by")
+  recordedBy    User              @relation(fields: [recordedById], references: [id])
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  @@index([birdId])
+  @@index([date])
+  @@map("weight_records")
+}
+
+// ============== HEALTH RECORDS ==============
+
+// Many-to-many: Vaccinations can apply to multiple birds
+model Vaccination {
+  id                String              @id @default(cuid())
+  vaccineName       String              @map("vaccine_name")
+  dateGiven         DateTime            @map("date_given")
+  dosage            String?
+  method            String?
+  nextDueDate       DateTime?           @map("next_due_date")
+  notes             String?
+  administeredById  String              @map("administered_by")
+  administeredBy    User                @relation(fields: [administeredById], references: [id])
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  birds             VaccinationBird[]
+
+  @@map("vaccinations")
+}
+
+model VaccinationBird {
+  vaccinationId String      @map("vaccination_id")
+  vaccination   Vaccination @relation(fields: [vaccinationId], references: [id], onDelete: Cascade)
+  birdId        String      @map("bird_id")
+  bird          Bird        @relation(fields: [birdId], references: [id])
+
+  @@id([vaccinationId, birdId])
+  @@map("vaccination_birds")
+}
+
+enum HealthOutcome {
+  RECOVERED
+  ONGOING
+  DECEASED
+}
+
+model HealthIncident {
+  id            String          @id @default(cuid())
+  dateNoticed   DateTime        @map("date_noticed")
+  symptoms      String?
+  diagnosis     String?
+  treatment     String?
+  outcome       HealthOutcome   @default(ONGOING)
+  notes         String?
+  reportedById  String          @map("reported_by")
+  reportedBy    User            @relation(fields: [reportedById], references: [id])
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  birds         HealthIncidentBird[]
+  medications   Medication[]
+
+  @@map("health_incidents")
+}
+
+model HealthIncidentBird {
+  incidentId    String          @map("incident_id")
+  incident      HealthIncident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  birdId        String          @map("bird_id")
+  bird          Bird            @relation(fields: [birdId], references: [id])
+
+  @@id([incidentId, birdId])
+  @@map("health_incident_birds")
+}
+
+model Medication {
+  id                  String          @id @default(cuid())
+  healthIncidentId    String?         @map("health_incident_id")
+  healthIncident      HealthIncident? @relation(fields: [healthIncidentId], references: [id])
+  medicationName      String          @map("medication_name")
+  dosage              String?
+  startDate           DateTime        @map("start_date")
+  endDate             DateTime?       @map("end_date")
+  withdrawalDays      Int?            @map("withdrawal_days")
+  notes               String?
+  administeredById    String          @map("administered_by")
+  administeredBy      User            @relation(fields: [administeredById], references: [id])
+  createdAt           DateTime        @default(now()) @map("created_at")
+
+  birds               MedicationBird[]
+
+  @@map("medications")
+}
+
+model MedicationBird {
+  medicationId  String      @map("medication_id")
+  medication    Medication  @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  birdId        String      @map("bird_id")
+  bird          Bird        @relation(fields: [birdId], references: [id])
+
+  @@id([medicationId, birdId])
+  @@map("medication_birds")
+}
+
+// ============== HOUSING ==============
+
+enum CoopType {
+  BREEDING_PEN
+  GROW_OUT
+  LAYER_HOUSE
+  BROODER
+  QUARANTINE
+}
+
+enum CoopStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+model Coop {
+  id          String      @id @default(cuid())
+  name        String
+  coopType    CoopType    @map("coop_type")
+  capacity    Int
+  status      CoopStatus  @default(ACTIVE)
+  notes       String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  birds             Bird[]
+  coopAssignments   CoopAssignment[]
+  feedConsumptions  FeedConsumption[]
+
+  @@map("coops")
+}
+
+// Track history of bird movements between coops
+model CoopAssignment {
+  id          String    @id @default(cuid())
+  birdId      String    @map("bird_id")
+  bird        Bird      @relation(fields: [birdId], references: [id])
+  coopId      String    @map("coop_id")
+  coop        Coop      @relation(fields: [coopId], references: [id])
+  assignedAt  DateTime  @map("assigned_at")
+  removedAt   DateTime? @map("removed_at")
+
+  @@index([birdId])
+  @@index([coopId])
+  @@map("coop_assignments")
+}
+
+// ============== FEED MANAGEMENT ==============
+
+enum FeedType {
+  STARTER
+  GROWER
+  LAYER
+  BREEDER
+  FINISHER
+  SUPPLEMENT
+}
+
+model FeedInventory {
+  id            String    @id @default(cuid())
+  feedType      FeedType  @map("feed_type")
+  brand         String?
+  quantityKg    Float     @map("quantity_kg")
+  costPerKg     Float?    @map("cost_per_kg")
+  reorderLevel  Float?    @map("reorder_level")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  consumptions  FeedConsumption[]
+
+  @@map("feed_inventory")
+}
+
+model FeedConsumption {
+  id              String        @id @default(cuid())
+  feedInventoryId String        @map("feed_inventory_id")
+  feedInventory   FeedInventory @relation(fields: [feedInventoryId], references: [id])
+  coopId          String        @map("coop_id")
+  coop            Coop          @relation(fields: [coopId], references: [id])
+  date            DateTime
+  quantityKg      Float         @map("quantity_kg")
+  recordedById    String        @map("recorded_by")
+  recordedBy      User          @relation(fields: [recordedById], references: [id])
+  notes           String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([coopId])
+  @@index([date])
+  @@map("feed_consumption")
+}
+
+// ============== ID TYPE CONFIGURATION ==============
+
+// Allow users to define custom ID types
+model IdTypeConfig {
+  id          String    @id @default(cuid())
+  code        String    @unique // LEG_COLOR, LEG_NUMBER, WING_BAND, RFID, or custom
+  name        String    // Display name
+  nameTl      String?   @map("name_tl") // Tagalog translation
+  description String?
+  isSystem    Boolean   @default(false) @map("is_system") // Built-in types
+  isActive    Boolean   @default(true) @map("is_active")
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("id_type_config")
+}
+
+// ============== FEED AGE STAGES ==============
+
+// Define feed stages by age (Starter, Grower, Finisher, Breeder)
+model FeedStage {
+  id            String    @id @default(cuid())
+  name          String    // Starter, Grower, Finisher, Breeder
+  nameTl        String?   @map("name_tl") // Tagalog translation
+  feedType      FeedType  @map("feed_type")
+  minAgeDays    Int       @map("min_age_days") // Age when this stage starts
+  maxAgeDays    Int?      @map("max_age_days") // Age when this stage ends (null = no limit)
+  description   String?
+  notes         String?   // Can include brand recommendations
+  isActive      Boolean   @default(true) @map("is_active")
+  sortOrder     Int       @default(0) @map("sort_order")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("feed_stages")
+}
+
+// ============== CONDITIONING/EXERCISE (SABONG) ==============
+
+// User-defined exercise types
+model ExerciseType {
+  id          String    @id @default(cuid())
+  name        String    // e.g., Sparring, Running, Cord Work, Flying
+  nameTl      String?   @map("name_tl") // Tagalog translation
+  description String?
+  isActive    Boolean   @default(true) @map("is_active")
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  exerciseRecords ExerciseRecord[]
+
+  @@map("exercise_types")
+}
+
+// Track conditioning/exercise sessions per bird
+model ExerciseRecord {
+  id              String        @id @default(cuid())
+  birdId          String        @map("bird_id")
+  bird            Bird          @relation(fields: [birdId], references: [id])
+  exerciseTypeId  String        @map("exercise_type_id")
+  exerciseType    ExerciseType  @relation(fields: [exerciseTypeId], references: [id])
+  date            DateTime
+  durationMinutes Int?          @map("duration_minutes")
+  intensity       String?       // Light, Medium, Hard
+  notes           String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([birdId])
+  @@index([date])
+  @@map("exercise_records")
+}
+
+// ============== FIGHT RECORDS (SABONG) ==============
+
+enum FightOutcome {
+  WIN
+  LOSS
+  DRAW
+}
+
+model FightRecord {
+  id          String        @id @default(cuid())
+  birdId      String        @map("bird_id")
+  bird        Bird          @relation(fields: [birdId], references: [id])
+  date        DateTime
+  outcome     FightOutcome
+  location    String?       // Derby/event name
+  notes       String?
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([birdId])
+  @@index([date])
+  @@map("fight_records")
+}
+
+// ============== EGG SIZE CATEGORIES ==============
+
+// User-defined egg size categories
+model EggSizeCategory {
+  id          String    @id @default(cuid())
+  name        String    // e.g., Small, Medium, Large, XL, Jumbo
+  nameTl      String?   @map("name_tl") // Tagalog translation
+  minWeightG  Float?    @map("min_weight_g") // Minimum weight in grams
+  maxWeightG  Float?    @map("max_weight_g") // Maximum weight in grams
+  description String?
+  isActive    Boolean   @default(true) @map("is_active")
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("egg_size_categories")
+}
+
+// ============== OFFSPRING COUNT OVERRIDE ==============
+
+// Manual override for offspring counts when auto-calculation doesn't reflect reality
+model OffspringCountOverride {
+  id              String    @id @default(cuid())
+  birdId          String    @unique @map("bird_id")
+  bird            Bird      @relation(fields: [birdId], references: [id])
+  maleCount       Int?      @map("male_count")
+  femaleCount     Int?      @map("female_count")
+  unknownCount    Int?      @map("unknown_count")
+  notes           String?   // Reason for override
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("offspring_count_overrides")
+}
