@@ -38,15 +38,6 @@ interface BirdRecord {
   breedComposition: Record<string, number> | null
 }
 
-interface SearchResult {
-  id: string
-  name: string | null
-  sex: string
-  status: string
-  matchedId: { type: string; value: string } | null
-  identifiers: Array<{ idType: string; idValue: string }>
-}
-
 export default function BirdsPage() {
   const { t, formatAge } = useLanguage()
   const searchParams = useSearchParams()
@@ -55,9 +46,7 @@ export default function BirdsPage() {
   const [birds, setBirds] = useState<BirdRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  const [showSearchResults, setShowSearchResults] = useState(false)
   const [filterSex, setFilterSex] = useState<string>("all")
   const [filterStatus, setFilterStatus] = useState<string>("all")
   const [showFilters, setShowFilters] = useState(false)
@@ -65,27 +54,32 @@ export default function BirdsPage() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Fetch all birds
-  useEffect(() => {
-    async function fetchBirds() {
-      try {
-        const params = new URLSearchParams()
-        if (filterSex !== "all") params.set("sex", filterSex)
-        if (filterStatus !== "all") params.set("status", filterStatus)
+  // Fetch birds with search and filters
+  const fetchBirds = useCallback(async (query?: string) => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (filterSex !== "all") params.set("sex", filterSex)
+      if (filterStatus !== "all") params.set("status", filterStatus)
+      if (query && query.length >= 1) params.set("search", query)
 
-        const res = await fetch(`/api/birds?${params}`)
-        if (res.ok) {
-          const json = await res.json()
-          setBirds(json.birds || [])
-        }
-      } catch (error) {
-        console.error("Failed to fetch birds:", error)
-      } finally {
-        setLoading(false)
+      const res = await fetch(`/api/birds?${params}`)
+      if (res.ok) {
+        const json = await res.json()
+        setBirds(json.birds || [])
       }
+    } catch (error) {
+      console.error("Failed to fetch birds:", error)
+    } finally {
+      setLoading(false)
+      setIsSearching(false)
     }
-    fetchBirds()
   }, [filterSex, filterStatus])
+
+  // Fetch on filter change
+  useEffect(() => {
+    fetchBirds(searchQuery)
+  }, [filterSex, filterStatus]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-focus search if requested
   useEffect(() => {
@@ -94,28 +88,11 @@ export default function BirdsPage() {
     }
   }, [autoFocusSearch])
 
-  // Fast search with debounce
-  const handleSearch = useCallback(async (query: string) => {
-    if (query.length < 2) {
-      setSearchResults([])
-      setShowSearchResults(false)
-      return
-    }
-
+  // Search with debounce - filters main list
+  const handleSearch = useCallback((query: string) => {
     setIsSearching(true)
-    try {
-      const res = await fetch(`/api/birds/search?q=${encodeURIComponent(query)}`)
-      if (res.ok) {
-        const json = await res.json()
-        setSearchResults(json.results || [])
-        setShowSearchResults(true)
-      }
-    } catch (error) {
-      console.error("Search failed:", error)
-    } finally {
-      setIsSearching(false)
-    }
-  }, [])
+    fetchBirds(query)
+  }, [fetchBirds])
 
   const onSearchChange = (value: string) => {
     setSearchQuery(value)
@@ -131,15 +108,11 @@ export default function BirdsPage() {
 
   const clearSearch = () => {
     setSearchQuery("")
-    setSearchResults([])
-    setShowSearchResults(false)
+    fetchBirds("")
     searchInputRef.current?.focus()
   }
 
-  const getDisplayId = (bird: BirdRecord | SearchResult) => {
-    if ("matchedId" in bird && bird.matchedId) {
-      return bird.matchedId.value
-    }
+  const getDisplayId = (bird: BirdRecord) => {
     return bird.identifiers[0]?.idValue || bird.name || bird.id.slice(-6)
   }
 
@@ -223,52 +196,11 @@ export default function BirdsPage() {
           )}
         </div>
 
-        {/* Search Results Dropdown */}
-        {showSearchResults && searchResults.length > 0 && (
-          <Card className="absolute top-full left-0 right-0 mt-2 z-50 shadow-xl border-2 border-orange-100">
-            <CardContent className="p-2">
-              <p className="text-xs text-muted-foreground px-3 py-2">
-                {searchResults.length} {searchResults.length === 1 ? "result" : "results"}
-              </p>
-              <div className="max-h-80 overflow-y-auto">
-                {searchResults.map((bird) => (
-                  <Link
-                    key={bird.id}
-                    href={`/birds/${bird.id}`}
-                    onClick={() => setShowSearchResults(false)}
-                    className="flex items-center justify-between p-3 hover:bg-orange-50 rounded-xl transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={cn("w-10 h-10 rounded-full flex items-center justify-center", getSexColor(bird.sex))}>
-                        <Bird className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-800">{getDisplayId(bird)}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {bird.sex === "MALE" ? t("bird.sex.male") : bird.sex === "FEMALE" ? t("bird.sex.female") : t("bird.sex.unknown")}
-                          {bird.matchedId && bird.matchedId.type !== "name" && (
-                            <span className="ml-2 text-orange-600">
-                              {bird.matchedId.type}: {bird.matchedId.value}
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    <ChevronRight className="h-5 w-5 text-gray-400" />
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {showSearchResults && searchResults.length === 0 && searchQuery.length >= 2 && !isSearching && (
-          <Card className="absolute top-full left-0 right-0 mt-2 z-50 shadow-xl border-2 border-orange-100">
-            <CardContent className="p-6 text-center">
-              <Bird className="h-10 w-10 mx-auto text-orange-200 mb-2" />
-              <p className="text-muted-foreground">{t("common.notFound")}</p>
-            </CardContent>
-          </Card>
+        {/* Search indicator */}
+        {isSearching && (
+          <div className="absolute right-12 top-1/2 -translate-y-1/2">
+            <div className="w-5 h-5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+          </div>
         )}
       </div>
 

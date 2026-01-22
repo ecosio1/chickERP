@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
       })),
       // Primary display ID (first identifier or name)
       displayId: bird.identifiers[0]?.idValue || bird.name || bird.id.slice(-6),
+      breedComposition: bird.breedComposition,
     }))
 
     return successResponse(results)

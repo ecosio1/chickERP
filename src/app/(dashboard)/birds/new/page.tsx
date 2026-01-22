@@ -17,7 +17,10 @@ import {
   Palette,
   Crown,
   AlertTriangle,
+  Dna,
 } from "lucide-react"
+import { BreedCompositionEditor } from "@/components/birds/BreedCompositionEditor"
+import { calculateChildBreedComposition, type BreedComposition } from "@/lib/breed-utils"
 import { useLanguage } from "@/hooks/use-language"
 import {
   Select,
@@ -33,6 +36,13 @@ interface ParentSearchResult {
   name: string | null
   sex: string
   identifiers: Array<{ idType: string; idValue: string }>
+  breedComposition?: BreedComposition[] | null
+}
+
+interface Breed {
+  id: string
+  name: string
+  code: string
 }
 
 interface BirdColor {
@@ -85,7 +95,13 @@ export default function NewBirdPage() {
   const [showSireSearch, setShowSireSearch] = useState(false)
   const [showDamSearch, setShowDamSearch] = useState(false)
 
-  // Fetch colors on mount
+  // Breed state
+  const [breeds, setBreeds] = useState<Breed[]>([])
+  const [breedComposition, setBreedComposition] = useState<BreedComposition[]>([])
+  const [breedOverride, setBreedOverride] = useState(false)
+  const [calculatedBreeds, setCalculatedBreeds] = useState<BreedComposition[] | null>(null)
+
+  // Fetch colors and breeds on mount
   useEffect(() => {
     async function fetchColors() {
       try {
@@ -98,7 +114,19 @@ export default function NewBirdPage() {
         console.error("Failed to fetch colors:", error)
       }
     }
+    async function fetchBreeds() {
+      try {
+        const res = await fetch("/api/breeds")
+        if (res.ok) {
+          const data = await res.json()
+          setBreeds(data || [])
+        }
+      } catch (error) {
+        console.error("Failed to fetch breeds:", error)
+      }
+    }
     fetchColors()
+    fetchBreeds()
   }, [])
 
   const handleIdentifierChange = (index: number, field: "idType" | "idValue", value: string) => {
@@ -136,12 +164,24 @@ export default function NewBirdPage() {
     }
   }
 
+  const recalculateBreeds = (sire: ParentSearchResult | null, dam: ParentSearchResult | null) => {
+    const calculated = calculateChildBreedComposition(
+      sire?.breedComposition || null,
+      dam?.breedComposition || null
+    )
+    setCalculatedBreeds(calculated.length > 0 ? calculated : null)
+    if (!breedOverride && calculated.length > 0) {
+      setBreedComposition(calculated)
+    }
+  }
+
   const selectSire = (bird: ParentSearchResult) => {
     setSelectedSire(bird)
     setFormData({ ...formData, sireId: bird.id })
     setSireSearch("")
     setSireResults([])
     setShowSireSearch(false)
+    recalculateBreeds(bird, selectedDam)
   }
 
   const selectDam = (bird: ParentSearchResult) => {
@@ -150,6 +190,19 @@ export default function NewBirdPage() {
     setDamSearch("")
     setDamResults([])
     setShowDamSearch(false)
+    recalculateBreeds(selectedSire, bird)
+  }
+
+  const clearSire = () => {
+    setSelectedSire(null)
+    setFormData({ ...formData, sireId: "" })
+    recalculateBreeds(null, selectedDam)
+  }
+
+  const clearDam = () => {
+    setSelectedDam(null)
+    setFormData({ ...formData, damId: "" })
+    recalculateBreeds(selectedSire, null)
   }
 
   const getDisplayId = (b: ParentSearchResult) => {
@@ -176,6 +229,8 @@ export default function NewBirdPage() {
           combType: formData.combType || null,
           earlyLifeNotes: formData.earlyLifeNotes || null,
           identifiers: validIdentifiers,
+          breedComposition: breedComposition.length > 0 ? breedComposition : null,
+          breedOverride: breedOverride,
         }),
       })
 
@@ -434,10 +489,7 @@ export default function NewBirdPage() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      setSelectedSire(null)
-                      setFormData({ ...formData, sireId: "" })
-                    }}
+                    onClick={clearSire}
                     className="text-red-500"
                   >
                     <X className="h-4 w-4" />
@@ -494,10 +546,7 @@ export default function NewBirdPage() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      setSelectedDam(null)
-                      setFormData({ ...formData, damId: "" })
-                    }}
+                    onClick={clearDam}
                     className="text-red-500"
                   >
                     <X className="h-4 w-4" />
@@ -538,6 +587,26 @@ export default function NewBirdPage() {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Breed Composition */}
+        <Card className="card-warm">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold text-gray-700 flex items-center gap-2">
+              <Dna className="h-5 w-5 text-purple-500" />
+              Breed Composition (Optional)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BreedCompositionEditor
+              value={breedComposition}
+              onChange={setBreedComposition}
+              breeds={breeds}
+              calculatedFromParents={calculatedBreeds}
+              isOverride={breedOverride}
+              onOverrideChange={setBreedOverride}
+            />
           </CardContent>
         </Card>
 

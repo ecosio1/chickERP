@@ -42,17 +42,23 @@ export async function GET(
         coop: true,
         color: true,
         sire: {
-          include: {
+          select: {
+            id: true,
+            name: true,
             identifiers: true,
-            sire: { select: { id: true, name: true, identifiers: true } },
-            dam: { select: { id: true, name: true, identifiers: true } },
+            breedComposition: true,
+            sire: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
+            dam: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
           },
         },
         dam: {
-          include: {
+          select: {
+            id: true,
+            name: true,
             identifiers: true,
-            sire: { select: { id: true, name: true, identifiers: true } },
-            dam: { select: { id: true, name: true, identifiers: true } },
+            breedComposition: true,
+            sire: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
+            dam: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
           },
         },
         offspringAsSire: {

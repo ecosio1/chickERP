@@ -25,6 +25,7 @@ import {
   Crown,
   AlertTriangle,
 } from "lucide-react"
+import { PhotoGallery } from "@/components/birds/PhotoGallery"
 import { useLanguage } from "@/hooks/use-language"
 import { cn } from "@/lib/utils"
 import {
@@ -60,7 +61,7 @@ interface BirdDetail {
   dam: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }> } | null
   coop: { id: string; name: string } | null
   identifiers: Array<{ id: string; idType: string; idValue: string }>
-  photos: Array<{ id: string; url: string; isPrimary: boolean }>
+  photos: Array<{ id: string; url: string; isPrimary: boolean; caption?: string | null }>
   notes: Array<{ id: string; content: string; createdAt: string }>
   eggs: Array<{ id: string; layDate: string; eggMark: string | null }>
   weights: Array<{ id: string; date: string; weightGrams: number; milestone: string | null }>
@@ -280,9 +281,12 @@ export default function BirdDetailPage() {
       <Card className="card-warm">
         <CardContent className="p-6">
           <div className="flex items-start gap-6">
-            <div className={cn("w-20 h-20 rounded-2xl flex items-center justify-center border-2", getSexColor(bird.sex))}>
-              <Bird className="h-10 w-10" />
-            </div>
+            <PhotoGallery
+              birdId={bird.id}
+              photos={bird.photos}
+              sexColor={getSexColor(bird.sex)}
+              onPhotosChange={(newPhotos) => setBird({ ...bird, photos: newPhotos })}
+            />
             <div className="flex-1 space-y-4">
               {/* Status */}
               <div className="flex items-center gap-2">
@@ -314,7 +318,7 @@ export default function BirdDetailPage() {
               </div>
 
               {/* Identifiers */}
-              {bird.identifiers.length > 0 && (
+              {bird.identifiers?.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {bird.identifiers.map((id) => (
                     <span
@@ -463,7 +467,7 @@ export default function BirdDetailPage() {
             <Card className="card-warm">
               <CardContent className="p-4 text-center">
                 <Egg className="h-8 w-8 mx-auto text-amber-500 mb-2" />
-                <p className="text-2xl font-bold text-gray-800">{bird.eggs.length}</p>
+                <p className="text-2xl font-bold text-gray-800">{bird.eggs?.length ?? 0}</p>
                 <p className="text-sm text-muted-foreground">{t("egg.title")}</p>
               </CardContent>
             </Card>
@@ -471,7 +475,7 @@ export default function BirdDetailPage() {
             <Card className="card-warm">
               <CardContent className="p-4 text-center">
                 <Scale className="h-8 w-8 mx-auto text-green-500 mb-2" />
-                <p className="text-2xl font-bold text-gray-800">{bird.weights.length}</p>
+                <p className="text-2xl font-bold text-gray-800">{bird.weights?.length ?? 0}</p>
                 <p className="text-sm text-muted-foreground">{t("weight.title")}</p>
               </CardContent>
             </Card>
@@ -479,7 +483,7 @@ export default function BirdDetailPage() {
             <Card className="card-warm">
               <CardContent className="p-4 text-center">
                 <Syringe className="h-8 w-8 mx-auto text-purple-500 mb-2" />
-                <p className="text-2xl font-bold text-gray-800">{bird.vaccinations.length}</p>
+                <p className="text-2xl font-bold text-gray-800">{bird.vaccinations?.length ?? 0}</p>
                 <p className="text-sm text-muted-foreground">{t("health.vaccinations")}</p>
               </CardContent>
             </Card>
@@ -494,7 +498,7 @@ export default function BirdDetailPage() {
           </div>
 
           {/* Recent Weights */}
-          {bird.weights.length > 0 && (
+          {bird.weights?.length > 0 && (
             <Card className="card-warm">
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-lg font-semibold text-gray-700">

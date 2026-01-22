@@ -11,6 +11,7 @@ import {
   User,
   ChevronRight,
   Palette,
+  Dna,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
 import { useSession } from "next-auth/react"
@@ -54,6 +55,15 @@ const settingsSections = [
         href: "/settings/bird-colors",
         icon: Palette,
         color: "bg-red-100 text-red-600",
+      },
+      {
+        name: "Breeds",
+        nameTl: "Mga Breed",
+        description: "Manage chicken breeds for genetics tracking",
+        descriptionTl: "Pamahalaan ang mga breed ng manok para sa pagsubaybay ng genetics",
+        href: "/settings/breeds",
+        icon: Dna,
+        color: "bg-purple-100 text-purple-600",
       },
     ],
   },
