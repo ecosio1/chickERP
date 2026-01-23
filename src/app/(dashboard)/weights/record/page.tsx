@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,7 +30,7 @@ interface BirdSearchResult {
   identifiers: Array<{ idType: string; idValue: string }>
 }
 
-export default function RecordWeightPage() {
+function RecordWeightPageContent() {
   const { t } = useLanguage()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -331,5 +331,13 @@ export default function RecordWeightPage() {
       {/* Spacer for mobile bottom nav */}
       <div className="h-20 lg:hidden" />
     </div>
+  )
+}
+
+export default function RecordWeightPage() {
+  return (
+    <Suspense fallback={<div className="p-4 lg:p-8"><div className="h-20 bg-orange-50 rounded-2xl animate-pulse" /></div>}>
+      <RecordWeightPageContent />
+    </Suspense>
   )
 }

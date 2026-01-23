@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { Suspense, useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
@@ -54,7 +54,7 @@ const initialFilters: FilterState = {
   ageRange: null,
 }
 
-export default function BirdsPage() {
+function BirdsPageContent() {
   const { t, formatAge } = useLanguage()
   const searchParams = useSearchParams()
   const autoFocusSearch = searchParams.get("search") === "true"
@@ -534,5 +534,13 @@ export default function BirdsPage() {
       {/* Spacer for mobile bottom nav */}
       <div className="h-20 lg:hidden" />
     </div>
+  )
+}
+
+export default function BirdsPage() {
+  return (
+    <Suspense fallback={<div className="p-4 lg:p-8"><div className="h-20 bg-orange-50 rounded-2xl animate-pulse" /></div>}>
+      <BirdsPageContent />
+    </Suspense>
   )
 }

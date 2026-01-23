@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -37,7 +37,7 @@ interface ExerciseType {
   nameTl: string | null
 }
 
-export default function RecordExercisePage() {
+function RecordExercisePageContent() {
   const { t, language } = useLanguage()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -369,5 +369,13 @@ export default function RecordExercisePage() {
       {/* Spacer for mobile bottom nav */}
       <div className="h-20 lg:hidden" />
     </div>
+  )
+}
+
+export default function RecordExercisePage() {
+  return (
+    <Suspense fallback={<div className="p-4 lg:p-8"><div className="h-20 bg-orange-50 rounded-2xl animate-pulse" /></div>}>
+      <RecordExercisePageContent />
+    </Suspense>
   )
 }
