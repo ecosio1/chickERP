@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { requireAuth, errorResponse } from "@/lib/api-utils"
 import { generateCSV, createCSVResponse, formatDateForCSV, getBirdDisplayName, ExportType } from "@/lib/export-utils"
+import { getColorById } from "@/lib/chicken-colors"
 
 export async function GET(
   req: NextRequest,
@@ -53,7 +54,6 @@ async function exportBirds(status: string | null) {
     include: {
       identifiers: true,
       coop: { select: { name: true } },
-      color: { select: { name: true } },
       sire: { select: { name: true, identifiers: true } },
       dam: { select: { name: true, identifiers: true } },
     },
@@ -75,13 +75,14 @@ async function exportBirds(status: string | null) {
   ]
 
   const rows = birds.map((bird) => {
-    const bandNumber = bird.identifiers.find((id) => id.idType.toLowerCase().includes("band"))?.idValue || ""
+    const bandNumber = bird.identifiers.find((id: { idType: string; idValue: string }) => id.idType.toLowerCase().includes("band"))?.idValue || ""
+    const colorInfo = bird.color ? getColorById(bird.color) : null
     return [
       bird.name || "",
       bird.sex,
       formatDateForCSV(bird.hatchDate),
       bird.status,
-      bird.color?.name || "",
+      colorInfo?.name || "",
       bird.combType || "",
       bird.coop?.name || "",
       getBirdDisplayName(bird.sire),

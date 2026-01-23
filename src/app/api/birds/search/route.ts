@@ -15,11 +15,12 @@ export async function GET(req: NextRequest) {
     }
 
     // Search across name and all identifier types
+    // Note: SQLite doesn't support mode: "insensitive", but LIKE is case-insensitive by default
     const birds = await prisma.bird.findMany({
       where: {
         OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { identifiers: { some: { idValue: { contains: q, mode: "insensitive" } } } },
+          { name: { contains: q } },
+          { identifiers: { some: { idValue: { contains: q } } } },
         ],
       },
       include: {
@@ -43,9 +44,9 @@ export async function GET(req: NextRequest) {
       hatchDate: bird.hatchDate,
       photoUrl: bird.photos[0]?.url || null,
       coop: bird.coop?.name || null,
-      identifiers: bird.identifiers.map((id) => ({
-        type: id.idType,
-        value: id.idValue,
+      identifiers: bird.identifiers.map((id: { idType: string; idValue: string }) => ({
+        idType: id.idType,
+        idValue: id.idValue,
       })),
       // Primary display ID (first identifier or name)
       displayId: bird.identifiers[0]?.idValue || bird.name || bird.id.slice(-6),

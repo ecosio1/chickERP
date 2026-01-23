@@ -10,8 +10,8 @@ import {
   Globe,
   User,
   ChevronRight,
-  Palette,
   Dna,
+  Building2,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
 import { useSession } from "next-auth/react"
@@ -48,15 +48,6 @@ const settingsSections = [
         color: "bg-green-100 text-green-600",
       },
       {
-        name: "Bird Colors",
-        nameTl: "Mga Kulay ng Manok",
-        description: "Manage plumage colors for your birds",
-        descriptionTl: "Pamahalaan ang mga kulay ng balahibo ng manok",
-        href: "/settings/bird-colors",
-        icon: Palette,
-        color: "bg-red-100 text-red-600",
-      },
-      {
         name: "Breeds",
         nameTl: "Mga Breed",
         description: "Manage chicken breeds for genetics tracking",
@@ -64,6 +55,15 @@ const settingsSections = [
         href: "/settings/breeds",
         icon: Dna,
         color: "bg-purple-100 text-purple-600",
+      },
+      {
+        name: "Source Farms",
+        nameTl: "Mga Pinagmulang Farm",
+        description: "Manage farms where breeds are sourced from",
+        descriptionTl: "Pamahalaan ang mga farm kung saan nagmula ang mga breed",
+        href: "/settings/source-farms",
+        icon: Building2,
+        color: "bg-teal-100 text-teal-600",
       },
     ],
   },

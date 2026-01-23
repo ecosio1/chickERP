@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const createConsumptionSchema = z.object({
@@ -8,7 +8,7 @@ const createConsumptionSchema = z.object({
   feedInventoryId: z.string().min(1, "Feed type is required"),
   date: z.string().transform((str) => new Date(str)),
   quantityKg: z.number().positive("Quantity must be positive"),
-  notes: z.string().optional(),
+  notes: z.string().nullable().optional(),
 })
 
 export async function GET(req: NextRequest) {
@@ -106,13 +106,6 @@ export async function POST(req: NextRequest) {
 
     return successResponse(consumption, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("POST /api/feed/consumption error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "POST /api/feed/consumption")
   }
 }

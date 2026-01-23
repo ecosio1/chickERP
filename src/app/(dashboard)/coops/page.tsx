@@ -76,8 +76,8 @@ export default function CoopsPage() {
     try {
       const res = await fetch("/api/coops")
       if (res.ok) {
-        const json = await res.json()
-        setCoops(json.data || [])
+        const data = await res.json()
+        setCoops(Array.isArray(data) ? data : [])
       }
     } catch (error) {
       console.error("Failed to fetch coops:", error)

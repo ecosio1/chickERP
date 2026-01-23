@@ -66,20 +66,6 @@ enum CombType {
   CUSHION     // Cushion comb
 }
 
-// Bird colors (configurable by user)
-model BirdColor {
-  id          String    @id @default(cuid())
-  name        String    @unique
-  nameTl      String?   @map("name_tl")
-  hexCode     String?   @map("hex_code")  // Optional hex color for display
-  description String?
-  createdAt   DateTime  @default(now()) @map("created_at")
-
-  birds       Bird[]
-
-  @@map("bird_colors")
-}
-
 model Bird {
   id            String      @id @default(cuid())
   name          String?     // Optional nickname
@@ -88,8 +74,7 @@ model Bird {
   status        BirdStatus  @default(ACTIVE)
 
   // Physical characteristics
-  colorId       String?     @map("color_id")
-  color         BirdColor?  @relation(fields: [colorId], references: [id])
+  color         String?     // Color ID from predefined list (e.g. "white", "black", "kelso")
   combType      CombType?   @map("comb_type")
 
   // Early life observations (for tracking abnormalities)
@@ -146,7 +131,7 @@ model Bird {
   @@index([sireId])
   @@index([damId])
   @@index([coopId])
-  @@index([colorId])
+  @@index([color])
   @@index([status])
   @@index([hatchDate])
   @@map("birds")
@@ -204,7 +189,31 @@ model Breed {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
+  sourceFarms BreedSourceFarm[]
+
   @@map("breeds")
+}
+
+// ============== SOURCE FARMS ==============
+
+model SourceFarm {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  breeds    BreedSourceFarm[]
+
+  @@map("source_farms")
+}
+
+model BreedSourceFarm {
+  breedId      String      @map("breed_id")
+  breed        Breed       @relation(fields: [breedId], references: [id], onDelete: Cascade)
+  sourceFarmId String      @map("source_farm_id")
+  sourceFarm   SourceFarm  @relation(fields: [sourceFarmId], references: [id], onDelete: Cascade)
+
+  @@id([breedId, sourceFarmId])
+  @@map("breed_source_farms")
 }
 
 // ============== EGG & INCUBATION ==============

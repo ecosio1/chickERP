@@ -14,6 +14,10 @@ interface ImportRow {
   sireName: string
   damName: string
   bandNumber: string
+  breedName?: string
+  breedCode?: string
+  color?: string
+  notes?: string
 }
 
 export async function POST(req: NextRequest) {
@@ -30,11 +34,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No birds data provided" }, { status: 400 })
     }
 
-    // Pre-fetch coops and existing birds for lookup
+    // Pre-fetch coops for lookup
     const coops = await prisma.coop.findMany({
       select: { id: true, name: true },
     })
     const coopMap = new Map(coops.map((c) => [c.name.toLowerCase(), c.id]))
+
+    // Pre-fetch breeds for lookup
+    const breeds = await prisma.breed.findMany({
+      select: { id: true, name: true, code: true },
+    })
+    const breedByCode = new Map(breeds.map((b) => [b.code.toLowerCase(), b.id]))
+    const breedByName = new Map(breeds.map((b) => [b.name.toLowerCase(), b.id]))
 
     // Get all birds for parent matching (by name or band number)
     const existingBirds = await prisma.bird.findMany({
@@ -46,15 +57,93 @@ export async function POST(req: NextRequest) {
 
     // Also check identifiers for band numbers
     const identifiers = await prisma.birdIdentifier.findMany({
-      where: { type: "BAND" },
-      select: { birdId: true, value: true },
+      where: { idType: "BAND" },
+      select: { birdId: true, idValue: true },
     })
-    const birdByBand = new Map(identifiers.map((i) => [i.value.toLowerCase(), i.birdId]))
+    const birdByBand = new Map(identifiers.map((i) => [i.idValue.toLowerCase(), i.birdId]))
 
     const results = {
       success: 0,
       failed: 0,
       errors: [] as { row: number; error: string }[],
+      autoCreated: {
+        coops: [] as string[],
+        breeds: [] as string[],
+      },
+    }
+
+    // Helper to generate breed code from name
+    const generateBreedCode = (name: string): string => {
+      const words = name.trim().split(/\s+/)
+      if (words.length === 1) {
+        return name.substring(0, 4).toUpperCase()
+      }
+      return words.map(w => w[0]).join("").toUpperCase().substring(0, 6)
+    }
+
+    // Helper to get or create coop
+    const getOrCreateCoop = async (name: string): Promise<string> => {
+      const key = name.toLowerCase()
+      const existingId = coopMap.get(key)
+      if (existingId) return existingId
+
+      // Auto-create the coop
+      const newCoop = await prisma.coop.create({
+        data: {
+          name: name,
+          capacity: 20,
+          coopType: "GROW_OUT",
+          status: "ACTIVE",
+        },
+      })
+
+      coopMap.set(key, newCoop.id)
+      results.autoCreated.coops.push(name)
+      return newCoop.id
+    }
+
+    // Helper to get or create breed
+    const getOrCreateBreed = async (code: string | undefined, name: string | undefined): Promise<string | null> => {
+      if (!code && !name) return null
+
+      // Try to find by code first
+      if (code) {
+        const existingId = breedByCode.get(code.toLowerCase())
+        if (existingId) return existingId
+      }
+
+      // Try to find by name
+      if (name) {
+        const existingId = breedByName.get(name.toLowerCase())
+        if (existingId) return existingId
+      }
+
+      // Auto-create if we have a name
+      if (name) {
+        let newCode = code?.toUpperCase() || generateBreedCode(name)
+
+        // Ensure unique code
+        let counter = 1
+        while (breedByCode.has(newCode.toLowerCase())) {
+          newCode = `${code?.toUpperCase() || generateBreedCode(name)}${counter}`
+          counter++
+        }
+
+        const newBreed = await prisma.breed.create({
+          data: {
+            name: name,
+            code: newCode,
+            varieties: [],
+          },
+        })
+
+        breedByCode.set(newCode.toLowerCase(), newBreed.id)
+        breedByName.set(name.toLowerCase(), newBreed.id)
+        results.autoCreated.breeds.push(name)
+        return newBreed.id
+      }
+
+      return null
     }
 
     // Process each bird
@@ -87,18 +176,17 @@ export async function POST(req: NextRequest) {
         }
         const status = statusMap[row.status] || BirdStatus.ACTIVE
 
-        // Look up coop
+        // Get or create coop
         let coopId: string | null = null
         if (row.coopName) {
-          coopId = coopMap.get(row.coopName.toLowerCase()) || null
-          if (!coopId) {
-            results.failed++
-            results.errors.push({
-              row: row.rowNumber,
-              error: `Coop not found: ${row.coopName}`,
-            })
-            continue
-          }
+          coopId = await getOrCreateCoop(row.coopName)
+        }
+
+        // Get or create breed
+        let breedComposition: { breedId: string; percentage: number }[] = []
+        const breedId = await getOrCreateBreed(row.breedCode, row.breedName)
+        if (breedId) {
+          breedComposition = [{ breedId, percentage: 100 }]
         }
 
         // Look up sire
@@ -145,6 +233,8 @@ export async function POST(req: NextRequest) {
             coopId,
             sireId,
             damId,
+            color: row.color || null,
+            breedComposition,
             createdById: session.user.id,
           },
         })
@@ -154,8 +244,8 @@ export async function POST(req: NextRequest) {
           await prisma.birdIdentifier.create({
             data: {
               birdId: bird.id,
-              type: "BAND",
-              value: row.bandNumber,
+              idType: "BAND",
+              idValue: row.bandNumber,
             },
           })
 

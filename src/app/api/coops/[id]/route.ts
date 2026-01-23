@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const updateCoopSchema = z.object({
@@ -8,7 +8,7 @@ const updateCoopSchema = z.object({
   capacity: z.number().int().positive().optional(),
   coopType: z.enum(["BREEDING_PEN", "GROW_OUT", "LAYER_HOUSE", "BROODER", "QUARANTINE"]).optional(),
   status: z.enum(["ACTIVE", "MAINTENANCE", "INACTIVE"]).optional(),
-  notes: z.string().optional(),
+  notes: z.string().nullable().optional(),
 })
 
 export async function GET(
@@ -76,14 +76,7 @@ export async function PUT(
 
     return successResponse(coop)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("PUT /api/coops/[id] error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "PUT /api/coops/[id]")
   }
 }
 

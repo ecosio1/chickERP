@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const createWeightSchema = z.object({
@@ -10,8 +10,8 @@ const createWeightSchema = z.object({
   milestone: z.enum([
     "HATCH", "WEEK_1", "WEEK_2", "WEEK_4", "WEEK_6",
     "WEEK_8", "WEEK_12", "WEEK_16", "WEEK_20", "ADULT", "OTHER"
-  ]).optional(),
-  notes: z.string().optional(),
+  ]).nullable().optional(),
+  notes: z.string().nullable().optional(),
 })
 
 // GET /api/weights - List weight records
@@ -97,13 +97,6 @@ export async function POST(req: NextRequest) {
 
     return successResponse(weight, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("POST /api/weights error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "POST /api/weights")
   }
 }

@@ -1,15 +1,15 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const createEggSchema = z.object({
   birdId: z.string().min(1, "Bird is required"),
   date: z.string().transform((str) => new Date(str)),
-  eggMark: z.string().optional(),
-  weightGrams: z.number().positive().optional(),
-  shellQuality: z.enum(["GOOD", "FAIR", "POOR", "SOFT"]).optional(),
-  notes: z.string().optional(),
+  eggMark: z.string().nullable().optional(),
+  weightGrams: z.number().positive().nullable().optional(),
+  shellQuality: z.enum(["GOOD", "FAIR", "POOR", "SOFT"]).nullable().optional(),
+  notes: z.string().nullable().optional(),
 })
 
 // GET /api/eggs - List egg records
@@ -100,13 +100,6 @@ export async function POST(req: NextRequest) {
 
     return successResponse(egg, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("POST /api/eggs error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "POST /api/eggs")
   }
 }

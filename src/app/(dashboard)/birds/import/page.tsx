@@ -27,6 +27,10 @@ interface ParsedRow {
   sireName: string
   damName: string
   bandNumber: string
+  breedName?: string
+  breedCode?: string
+  color?: string
+  notes?: string
   error?: string
 }
 
@@ -34,6 +38,10 @@ interface ImportResult {
   success: number
   failed: number
   errors: { row: number; error: string }[]
+  autoCreated?: {
+    coops: string[]
+    breeds: string[]
+  }
 }
 
 export default function ImportBirdsPage() {
@@ -74,6 +82,14 @@ export default function ImportBirdsPage() {
     const bandIdx = headers.findIndex(
       (h) => h === "band" || h === "band_number" || h === "tatak"
     )
+    const breedNameIdx = headers.findIndex(
+      (h) => h === "breed" || h === "breed_name" || h === "lahi"
+    )
+    const breedCodeIdx = headers.findIndex(
+      (h) => h === "breed_code" || h === "breedcode"
+    )
+    const colorIdx = headers.findIndex((h) => h === "color" || h === "kulay")
+    const notesIdx = headers.findIndex((h) => h === "notes" || h === "tala")
 
     if (sexIdx === -1) {
       throw new Error("CSV must have a 'sex' column (MALE, FEMALE, or UNKNOWN)")
@@ -97,6 +113,10 @@ export default function ImportBirdsPage() {
         sireName: sireIdx >= 0 ? values[sireIdx] || "" : "",
         damName: damIdx >= 0 ? values[damIdx] || "" : "",
         bandNumber: bandIdx >= 0 ? values[bandIdx] || "" : "",
+        breedName: breedNameIdx >= 0 ? values[breedNameIdx] || "" : "",
+        breedCode: breedCodeIdx >= 0 ? values[breedCodeIdx]?.toUpperCase() || "" : "",
+        color: colorIdx >= 0 ? values[colorIdx] || "" : "",
+        notes: notesIdx >= 0 ? values[notesIdx] || "" : "",
       }
 
       // Validate sex
@@ -185,9 +205,9 @@ export default function ImportBirdsPage() {
   }
 
   const downloadTemplate = () => {
-    const template = `name,sex,hatch_date,status,coop,sire,dam,band_number
-Rooster 1,MALE,2024-01-15,ACTIVE,Coop A,Father Bird,Mother Bird,BAND001
-Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
+    const template = `name,sex,hatch_date,status,coop,breed,breed_code,color,sire,dam,band_number,notes
+Rooster 1,MALE,2024-01-15,ACTIVE,Coop A,Rhode Island Red,RIR,Red,Father Bird,Mother Bird,BAND001,Imported bird
+Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
 
     const blob = new Blob([template], { type: "text/csv" })
     const url = URL.createObjectURL(blob)
@@ -257,6 +277,25 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
                   {importResult.failed > 0 &&
                     `, ${importResult.failed} ${language === "tl" ? "nabigo" : "failed"}`}
                 </p>
+                {importResult.autoCreated && (importResult.autoCreated.coops.length > 0 || importResult.autoCreated.breeds.length > 0) && (
+                  <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm font-medium text-blue-700 mb-1">
+                      {language === "tl" ? "Awtomatikong Nalikha:" : "Auto-Created:"}
+                    </p>
+                    {importResult.autoCreated.coops.length > 0 && (
+                      <p className="text-sm text-blue-600">
+                        {language === "tl" ? "Mga Kulungan: " : "Coops: "}
+                        {importResult.autoCreated.coops.join(", ")}
+                      </p>
+                    )}
+                    {importResult.autoCreated.breeds.length > 0 && (
+                      <p className="text-sm text-blue-600">
+                        {language === "tl" ? "Mga Lahi: " : "Breeds: "}
+                        {importResult.autoCreated.breeds.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {importResult.errors.length > 0 && (
                   <div className="mt-3 space-y-1">
                     {importResult.errors.slice(0, 5).map((err, idx) => (
@@ -330,7 +369,16 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
                 <code className="bg-orange-100 px-1 rounded">status</code> - ACTIVE, SOLD, DECEASED, CULLED, LOST, BREEDING, RETIRED
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">coop</code> - Coop name (must exist)
+                <code className="bg-orange-100 px-1 rounded">coop</code> - Coop name (auto-created if not exists)
+              </li>
+              <li>
+                <code className="bg-orange-100 px-1 rounded">breed</code> - Breed name (auto-created if not exists)
+              </li>
+              <li>
+                <code className="bg-orange-100 px-1 rounded">breed_code</code> - Breed code (optional, auto-generated)
+              </li>
+              <li>
+                <code className="bg-orange-100 px-1 rounded">color</code> - Bird color
               </li>
               <li>
                 <code className="bg-orange-100 px-1 rounded">sire</code> - Father bird name (must exist)
@@ -341,7 +389,15 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
               <li>
                 <code className="bg-orange-100 px-1 rounded">band_number</code> - Band/ring identifier
               </li>
+              <li>
+                <code className="bg-orange-100 px-1 rounded">notes</code> - Additional notes
+              </li>
             </ul>
+            <p className="text-xs text-green-600 mt-3">
+              {language === "tl"
+                ? "* Awtomatikong nalilikha ang mga coop at breed na hindi pa umiiral"
+                : "* Coops and breeds that don't exist will be automatically created"}
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -436,7 +492,9 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
                     <th className="text-left p-3 font-medium text-gray-600">Name</th>
                     <th className="text-left p-3 font-medium text-gray-600">Sex</th>
                     <th className="text-left p-3 font-medium text-gray-600">Hatch Date</th>
-                    <th className="text-left p-3 font-medium text-gray-600">Status</th>
+                    <th className="text-left p-3 font-medium text-gray-600">Coop</th>
+                    <th className="text-left p-3 font-medium text-gray-600">Breed</th>
+                    <th className="text-left p-3 font-medium text-gray-600">Color</th>
                     <th className="text-left p-3 font-medium text-gray-600">Band</th>
                     <th className="text-left p-3 font-medium text-gray-600">Result</th>
                   </tr>
@@ -465,7 +523,9 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,,,BAND002`
                         </span>
                       </td>
                       <td className="p-3">{row.hatchDate}</td>
-                      <td className="p-3">{row.status}</td>
+                      <td className="p-3">{row.coopName || "-"}</td>
+                      <td className="p-3">{row.breedName || "-"}</td>
+                      <td className="p-3">{row.color || "-"}</td>
                       <td className="p-3">{row.bandNumber || "-"}</td>
                       <td className="p-3">
                         {row.error ? (

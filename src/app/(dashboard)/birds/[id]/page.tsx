@@ -26,7 +26,9 @@ import {
   AlertTriangle,
 } from "lucide-react"
 import { PhotoGallery } from "@/components/birds/PhotoGallery"
+import { RFIDLinkButton } from "@/components/birds/RFIDLinkButton"
 import { useLanguage } from "@/hooks/use-language"
+import { getColorById } from "@/lib/chicken-colors"
 import { cn } from "@/lib/utils"
 import {
   AlertDialog,
@@ -51,10 +53,9 @@ interface BirdDetail {
   sireId: string | null
   damId: string | null
   coopId: string | null
-  colorId: string | null
+  color: string | null
   combType: string | null
   earlyLifeNotes: string | null
-  color: { id: string; name: string; nameTl: string | null; hexCode: string | null } | null
   breedComposition: Record<string, number> | null
   breedOverride: boolean
   sire: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }> } | null
@@ -243,6 +244,32 @@ export default function BirdDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <RFIDLinkButton
+            birdId={bird.id}
+            currentRfid={bird.identifiers?.find((id) => id.idType === "RFID")?.idValue || null}
+            onRfidChange={(newRfid) => {
+              if (newRfid) {
+                // Add or update RFID identifier
+                const existingIndex = bird.identifiers?.findIndex((id) => id.idType === "RFID") ?? -1
+                if (existingIndex >= 0) {
+                  const newIdentifiers = [...(bird.identifiers || [])]
+                  newIdentifiers[existingIndex] = { ...newIdentifiers[existingIndex], idValue: newRfid }
+                  setBird({ ...bird, identifiers: newIdentifiers })
+                } else {
+                  setBird({
+                    ...bird,
+                    identifiers: [...(bird.identifiers || []), { id: "temp", idType: "RFID", idValue: newRfid }],
+                  })
+                }
+              } else {
+                // Remove RFID identifier
+                setBird({
+                  ...bird,
+                  identifiers: bird.identifiers?.filter((id) => id.idType !== "RFID") || [],
+                })
+              }
+            }}
+          />
           <Link href={`/birds/${bird.id}/edit`}>
             <Button variant="outline" className="rounded-xl border-2 border-orange-100">
               <Edit className="h-4 w-4 mr-2" />
@@ -348,18 +375,21 @@ export default function BirdDetailPage() {
                     <span className="font-medium">{bird.coop.name}</span>
                   </div>
                 )}
-                {bird.color && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <div
-                      className="w-4 h-4 rounded-full border"
-                      style={{ backgroundColor: bird.color.hexCode || "#808080" }}
-                    />
-                    <span className="text-muted-foreground">{language === "tl" ? "Kulay" : "Color"}:</span>
-                    <span className="font-medium">
-                      {language === "tl" && bird.color.nameTl ? bird.color.nameTl : bird.color.name}
-                    </span>
-                  </div>
-                )}
+                {bird.color && (() => {
+                  const colorInfo = getColorById(bird.color)
+                  return colorInfo ? (
+                    <div className="flex items-center gap-2 text-sm">
+                      <div
+                        className="w-4 h-4 rounded-full border"
+                        style={{ backgroundColor: colorInfo.hexCode }}
+                      />
+                      <span className="text-muted-foreground">{language === "tl" ? "Kulay" : "Color"}:</span>
+                      <span className="font-medium">
+                        {language === "tl" ? colorInfo.nameTl : colorInfo.name}
+                      </span>
+                    </div>
+                  ) : null
+                })()}
                 {bird.combType && (
                   <div className="flex items-center gap-2 text-sm">
                     <Crown className="h-4 w-4 text-gray-400" />

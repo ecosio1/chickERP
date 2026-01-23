@@ -15,6 +15,7 @@ import {
   X,
   Search,
   Dna,
+  Palette,
 } from "lucide-react"
 import { BreedCompositionEditor } from "@/components/birds/BreedCompositionEditor"
 import { calculateChildBreedComposition, type BreedComposition } from "@/lib/breed-utils"
@@ -38,6 +39,7 @@ interface BirdDetail {
   sireId: string | null
   damId: string | null
   coopId: string | null
+  color: string | null
   sire: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }>; breedComposition?: BreedComposition[] | null } | null
   dam: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }>; breedComposition?: BreedComposition[] | null } | null
   identifiers: Array<{ id: string; idType: string; idValue: string }>
@@ -60,6 +62,15 @@ interface Breed {
   code: string
 }
 
+interface BirdColor {
+  id: string
+  name: string
+  nameTl: string
+  hexCode: string
+  suggested?: boolean
+  usageCount?: number
+}
+
 export default function EditBirdPage() {
   const { t } = useLanguage()
   const params = useParams()
@@ -76,8 +87,10 @@ export default function EditBirdPage() {
     sireId: "",
     damId: "",
     coopId: "",
+    color: "",
     newNote: "",
   })
+  const [colors, setColors] = useState<BirdColor[]>([])
   const [identifiers, setIdentifiers] = useState<Array<{ idType: string; idValue: string }>>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -98,6 +111,22 @@ export default function EditBirdPage() {
   const [breedOverride, setBreedOverride] = useState(false)
   const [calculatedBreeds, setCalculatedBreeds] = useState<BreedComposition[] | null>(null)
 
+  // Fetch colors with breed-based sorting
+  const fetchColors = async (breedIds: string[] = []) => {
+    try {
+      const url = breedIds.length > 0
+        ? `/api/colors?breeds=${breedIds.join(",")}`
+        : "/api/colors"
+      const res = await fetch(url)
+      if (res.ok) {
+        const json = await res.json()
+        setColors(json.data || [])
+      }
+    } catch (error) {
+      console.error("Failed to fetch colors:", error)
+    }
+  }
+
   // Fetch breeds on mount
   useEffect(() => {
     async function fetchBreeds() {
@@ -111,8 +140,17 @@ export default function EditBirdPage() {
         console.error("Failed to fetch breeds:", error)
       }
     }
+    fetchColors() // Initial fetch
     fetchBreeds()
   }, [])
+
+  // Refetch colors when breed composition changes
+  useEffect(() => {
+    if (breedComposition.length > 0) {
+      const breedIds = breedComposition.map(b => b.breedId)
+      fetchColors(breedIds)
+    }
+  }, [breedComposition])
 
   useEffect(() => {
     async function fetchBird() {
@@ -130,6 +168,7 @@ export default function EditBirdPage() {
             sireId: bird.sireId || "",
             damId: bird.damId || "",
             coopId: bird.coopId || "",
+            color: bird.color || "",
             newNote: "",
           })
           setIdentifiers(
@@ -276,6 +315,7 @@ export default function EditBirdPage() {
           sireId: formData.sireId || null,
           damId: formData.damId || null,
           coopId: formData.coopId || null,
+          color: formData.color || null,
           deathDate: formData.deathDate || null,
           causeOfDeath: formData.causeOfDeath || null,
           identifiers: validIdentifiers,
@@ -399,6 +439,47 @@ export default function EditBirdPage() {
               />
             </div>
 
+            <div>
+              <Label className="text-base flex items-center gap-2">
+                <Palette className="h-4 w-4" />
+                Color
+              </Label>
+              <Select
+                value={formData.color}
+                onValueChange={(value) => setFormData({ ...formData, color: value })}
+              >
+                <SelectTrigger className="mt-2 h-12 rounded-xl border-2 border-orange-100">
+                  <SelectValue placeholder="Select color" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {colors.map((color, index) => {
+                    const showDivider = index > 0 && colors[index - 1]?.suggested && !color.suggested
+                    return (
+                      <div key={color.id}>
+                        {showDivider && (
+                          <div className="px-2 py-1 text-xs text-muted-foreground border-t my-1">
+                            Other colors
+                          </div>
+                        )}
+                        <SelectItem value={color.id}>
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="w-4 h-4 rounded-full border border-gray-300"
+                              style={{ backgroundColor: color.hexCode }}
+                            />
+                            <span>{color.name}</span>
+                            {color.suggested && (
+                              <span className="text-xs text-orange-500 font-medium">(Common)</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      </div>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+
             {formData.status === "DECEASED" && (
               <>
                 <div>
@@ -447,6 +528,7 @@ export default function EditBirdPage() {
                     <SelectItem value="WING_BAND">{t("bird.wingBand")}</SelectItem>
                     <SelectItem value="RING">Ring</SelectItem>
                     <SelectItem value="TAG">Tag</SelectItem>
+                    <SelectItem value="RFID">RFID/NFC</SelectItem>
                     <SelectItem value="OTHER">Other</SelectItem>
                   </SelectContent>
                 </Select>

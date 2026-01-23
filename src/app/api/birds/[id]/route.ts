@@ -1,16 +1,16 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const updateBirdSchema = z.object({
-  name: z.string().optional(),
+  name: z.string().nullable().optional(),
   sex: z.enum(["MALE", "FEMALE", "UNKNOWN"]).optional(),
   status: z.enum(["ACTIVE", "SOLD", "DECEASED", "CULLED", "LOST", "BREEDING", "RETIRED", "ARCHIVED"]).optional(),
   sireId: z.string().nullable().optional(),
   damId: z.string().nullable().optional(),
   coopId: z.string().nullable().optional(),
-  colorId: z.string().nullable().optional(),
+  color: z.string().nullable().optional(), // Color ID from predefined list
   combType: z.enum(["SINGLE", "PEA", "ROSE", "WALNUT", "BUTTERCUP", "V_SHAPED", "CUSHION"]).nullable().optional(),
   earlyLifeNotes: z.string().nullable().optional(),
   breedComposition: z.array(z.object({
@@ -40,7 +40,6 @@ export async function GET(
           take: 20,
         },
         coop: true,
-        color: true,
         sire: {
           select: {
             id: true,
@@ -166,7 +165,7 @@ export async function PUT(
           sireId: data.sireId,
           damId: data.damId,
           coopId: data.coopId,
-          colorId: data.colorId,
+          color: data.color,
           combType: data.combType,
           earlyLifeNotes: data.earlyLifeNotes,
           breedComposition: data.breedComposition,
@@ -199,14 +198,7 @@ export async function PUT(
 
     return successResponse(bird)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("PUT /api/birds/[id] error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "PUT /api/birds/[id]")
   }
 }
 

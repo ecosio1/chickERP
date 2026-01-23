@@ -48,8 +48,10 @@ interface Breed {
 interface BirdColor {
   id: string
   name: string
-  nameTl: string | null
-  hexCode: string | null
+  nameTl: string
+  hexCode: string
+  suggested?: boolean
+  usageCount?: number
 }
 
 const COMB_TYPES = [
@@ -73,7 +75,7 @@ export default function NewBirdPage() {
     sireId: "",
     damId: "",
     coopId: "",
-    colorId: "",
+    color: "",
     combType: "",
     earlyLifeNotes: "",
     notes: "",
@@ -101,19 +103,24 @@ export default function NewBirdPage() {
   const [breedOverride, setBreedOverride] = useState(false)
   const [calculatedBreeds, setCalculatedBreeds] = useState<BreedComposition[] | null>(null)
 
-  // Fetch colors and breeds on mount
-  useEffect(() => {
-    async function fetchColors() {
-      try {
-        const res = await fetch("/api/settings/bird-colors")
-        if (res.ok) {
-          const json = await res.json()
-          setColors(json.colors || [])
-        }
-      } catch (error) {
-        console.error("Failed to fetch colors:", error)
+  // Fetch colors with breed-based sorting
+  const fetchColors = async (breedIds: string[] = []) => {
+    try {
+      const url = breedIds.length > 0
+        ? `/api/colors?breeds=${breedIds.join(",")}`
+        : "/api/colors"
+      const res = await fetch(url)
+      if (res.ok) {
+        const json = await res.json()
+        setColors(json.data || [])
       }
+    } catch (error) {
+      console.error("Failed to fetch colors:", error)
     }
+  }
+
+  // Fetch breeds on mount
+  useEffect(() => {
     async function fetchBreeds() {
       try {
         const res = await fetch("/api/breeds")
@@ -125,9 +132,19 @@ export default function NewBirdPage() {
         console.error("Failed to fetch breeds:", error)
       }
     }
-    fetchColors()
+    fetchColors() // Initial fetch without breed filter
     fetchBreeds()
   }, [])
+
+  // Refetch colors when breed composition changes
+  useEffect(() => {
+    if (breedComposition.length > 0) {
+      const breedIds = breedComposition.map(b => b.breedId)
+      fetchColors(breedIds)
+    } else {
+      fetchColors()
+    }
+  }, [breedComposition])
 
   const handleIdentifierChange = (index: number, field: "idType" | "idValue", value: string) => {
     const newIdentifiers = [...identifiers]
@@ -225,7 +242,7 @@ export default function NewBirdPage() {
           sireId: formData.sireId || null,
           damId: formData.damId || null,
           coopId: formData.coopId || null,
-          colorId: formData.colorId || null,
+          color: formData.color || null,
           combType: formData.combType || null,
           earlyLifeNotes: formData.earlyLifeNotes || null,
           identifiers: validIdentifiers,
@@ -339,35 +356,41 @@ export default function NewBirdPage() {
               <div>
                 <Label className="text-base">{language === "tl" ? "Kulay" : "Color"}</Label>
                 <Select
-                  value={formData.colorId}
-                  onValueChange={(value) => setFormData({ ...formData, colorId: value })}
+                  value={formData.color}
+                  onValueChange={(value) => setFormData({ ...formData, color: value })}
                 >
                   <SelectTrigger className="mt-2 h-12 rounded-xl border-2 border-orange-100">
                     <SelectValue placeholder={language === "tl" ? "Pumili ng kulay" : "Select color"} />
                   </SelectTrigger>
-                  <SelectContent>
-                    {colors.map((color) => (
-                      <SelectItem key={color.id} value={color.id}>
-                        <div className="flex items-center gap-2">
-                          {color.hexCode && (
-                            <div
-                              className="w-4 h-4 rounded-full border"
-                              style={{ backgroundColor: color.hexCode }}
-                            />
+                  <SelectContent className="max-h-64">
+                    {colors.map((color, index) => {
+                      const showDivider = index > 0 && colors[index - 1]?.suggested && !color.suggested
+                      return (
+                        <div key={color.id}>
+                          {showDivider && (
+                            <div className="px-2 py-1 text-xs text-muted-foreground border-t my-1">
+                              {language === "tl" ? "Iba pang mga kulay" : "Other colors"}
+                            </div>
                           )}
-                          {language === "tl" && color.nameTl ? color.nameTl : color.name}
+                          <SelectItem value={color.id}>
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="w-4 h-4 rounded-full border border-gray-300"
+                                style={{ backgroundColor: color.hexCode }}
+                              />
+                              <span>{language === "tl" ? color.nameTl : color.name}</span>
+                              {color.suggested && (
+                                <span className="text-xs text-orange-500 font-medium">
+                                  ({language === "tl" ? "Madalas" : "Common"})
+                                </span>
+                              )}
+                            </div>
+                          </SelectItem>
                         </div>
-                      </SelectItem>
-                    ))}
+                      )
+                    })}
                   </SelectContent>
                 </Select>
-                {colors.length === 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    <Link href="/settings/bird-colors" className="text-orange-500 hover:underline">
-                      {language === "tl" ? "Magdagdag ng mga kulay sa Settings" : "Add colors in Settings"}
-                    </Link>
-                  </p>
-                )}
               </div>
 
               <div>
@@ -432,6 +455,7 @@ export default function NewBirdPage() {
                     <SelectItem value="WING_BAND">{t("bird.wingBand")}</SelectItem>
                     <SelectItem value="RING">Ring</SelectItem>
                     <SelectItem value="TAG">Tag</SelectItem>
+                    <SelectItem value="RFID">RFID/NFC</SelectItem>
                     <SelectItem value="OTHER">Other</SelectItem>
                   </SelectContent>
                 </Select>

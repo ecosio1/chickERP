@@ -1,14 +1,14 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const createFeedSchema = z.object({
   feedType: z.enum(["STARTER", "GROWER", "LAYER", "BREEDER", "FINISHER", "SUPPLEMENT"]),
-  brand: z.string().optional(),
+  brand: z.string().nullable().optional(),
   quantityKg: z.number().positive("Quantity must be positive"),
-  costPerKg: z.number().nonnegative().optional(),
-  reorderLevel: z.number().nonnegative().optional(),
+  costPerKg: z.number().nonnegative().nullable().optional(),
+  reorderLevel: z.number().nonnegative().nullable().optional(),
 })
 
 export async function GET() {
@@ -77,13 +77,6 @@ export async function POST(req: NextRequest) {
 
     return successResponse(feed, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("POST /api/feed/inventory error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "POST /api/feed/inventory")
   }
 }

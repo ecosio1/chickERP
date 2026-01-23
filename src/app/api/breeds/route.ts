@@ -1,13 +1,14 @@
 import { NextRequest } from "next/server"
 import { prisma } from "@/lib/prisma"
-import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
+import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
 const createBreedSchema = z.object({
   name: z.string().min(1, "Breed name is required"),
   code: z.string().min(1, "Breed code is required").max(10),
-  description: z.string().optional(),
-  varieties: z.array(z.string()).optional(),
+  description: z.string().nullable().optional(),
+  varieties: z.array(z.string()).nullable().optional(),
+  sourceFarmIds: z.array(z.string()).nullable().optional(),
 })
 
 // GET /api/breeds - List all breeds
@@ -17,9 +18,22 @@ export async function GET() {
 
     const breeds = await prisma.breed.findMany({
       orderBy: { name: "asc" },
+      include: {
+        sourceFarms: {
+          include: {
+            sourceFarm: true,
+          },
+        },
+      },
     })
 
-    return successResponse(breeds)
+    // Transform to flatten sourceFarms
+    const transformed = breeds.map((breed) => ({
+      ...breed,
+      sourceFarms: breed.sourceFarms.map((sf) => sf.sourceFarm),
+    }))
+
+    return successResponse(transformed)
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
       return errorResponse("Unauthorized", 401)
@@ -61,18 +75,31 @@ export async function POST(req: NextRequest) {
         code: data.code.toUpperCase(),
         description: data.description,
         varieties: data.varieties || [],
+        sourceFarms: data.sourceFarmIds?.length
+          ? {
+              create: data.sourceFarmIds.map((farmId) => ({
+                sourceFarmId: farmId,
+              })),
+            }
+          : undefined,
+      },
+      include: {
+        sourceFarms: {
+          include: {
+            sourceFarm: true,
+          },
+        },
       },
     })
 
-    return successResponse(breed, 201)
+    // Transform to flatten sourceFarms
+    const transformed = {
+      ...breed,
+      sourceFarms: breed.sourceFarms.map((sf) => sf.sourceFarm),
+    }
+
+    return successResponse(transformed, 201)
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return errorResponse(error.errors[0].message, 400)
-    }
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return errorResponse("Unauthorized", 401)
-    }
-    console.error("POST /api/breeds error:", error)
-    return errorResponse("Internal server error", 500)
+    return handleApiError(error, "POST /api/breeds")
   }
 }
