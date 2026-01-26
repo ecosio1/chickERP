@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
       autoCreated: {
         coops: [] as string[],
         breeds: [] as string[],
+        sires: [] as string[],
+        dams: [] as string[],
       },
     }
 
@@ -189,37 +191,61 @@ export async function POST(req: NextRequest) {
           breedComposition = [{ breedId, percentage: 100 }]
         }
 
-        // Look up sire
+        // Look up or create sire
         let sireId: string | null = null
         if (row.sireName) {
           sireId =
             birdByName.get(row.sireName.toLowerCase()) ||
             birdByBand.get(row.sireName.toLowerCase()) ||
             null
+
           if (!sireId) {
-            results.failed++
-            results.errors.push({
-              row: row.rowNumber,
-              error: `Sire not found: ${row.sireName}`,
+            // Auto-create sire bird (estimate hatch date as 1 year before this bird)
+            const sireHatchDate = new Date(hatchDate)
+            sireHatchDate.setFullYear(sireHatchDate.getFullYear() - 1)
+
+            const newSire = await prisma.bird.create({
+              data: {
+                name: row.sireName,
+                sex: BirdSex.MALE,
+                hatchDate: sireHatchDate,
+                status: BirdStatus.ACTIVE,
+                createdById: session.user.id,
+              },
             })
-            continue
+
+            sireId = newSire.id
+            birdByName.set(row.sireName.toLowerCase(), newSire.id)
+            results.autoCreated.sires.push(row.sireName)
           }
         }
 
-        // Look up dam
+        // Look up or create dam
         let damId: string | null = null
         if (row.damName) {
           damId =
             birdByName.get(row.damName.toLowerCase()) ||
             birdByBand.get(row.damName.toLowerCase()) ||
             null
+
           if (!damId) {
-            results.failed++
-            results.errors.push({
-              row: row.rowNumber,
-              error: `Dam not found: ${row.damName}`,
+            // Auto-create dam bird (estimate hatch date as 1 year before this bird)
+            const damHatchDate = new Date(hatchDate)
+            damHatchDate.setFullYear(damHatchDate.getFullYear() - 1)
+
+            const newDam = await prisma.bird.create({
+              data: {
+                name: row.damName,
+                sex: BirdSex.FEMALE,
+                hatchDate: damHatchDate,
+                status: BirdStatus.ACTIVE,
+                createdById: session.user.id,
+              },
             })
-            continue
+
+            damId = newDam.id
+            birdByName.set(row.damName.toLowerCase(), newDam.id)
+            results.autoCreated.dams.push(row.damName)
           }
         }
 
