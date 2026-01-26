@@ -16,6 +16,7 @@ import {
   Bird,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
+import * as XLSX from "xlsx"
 
 interface ParsedRow {
   rowNumber: number
@@ -141,12 +142,125 @@ export default function ImportBirdsPage() {
     return rows
   }
 
+  const parseExcel = (buffer: ArrayBuffer): ParsedRow[] => {
+    const workbook = XLSX.read(buffer, { type: "array" })
+    const sheetName = workbook.SheetNames[0]
+    const worksheet = workbook.Sheets[sheetName]
+
+    // Convert to JSON with header row
+    const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+      raw: false,
+      defval: ""
+    })
+
+    if (jsonData.length === 0) {
+      throw new Error("Excel file must have at least one data row")
+    }
+
+    // Get headers from first row keys and normalize them
+    const firstRow = jsonData[0]
+    const headerMap: Record<string, string> = {}
+    Object.keys(firstRow).forEach((key) => {
+      headerMap[key.toLowerCase().trim()] = key
+    })
+
+    // Map expected columns
+    const findHeader = (options: string[]): string | undefined => {
+      for (const opt of options) {
+        const found = Object.keys(headerMap).find(h => h === opt)
+        if (found) return headerMap[found]
+      }
+      return undefined
+    }
+
+    const nameKey = findHeader(["name", "pangalan"])
+    const sexKey = findHeader(["sex", "kasarian"])
+    const hatchDateKey = findHeader(["hatch_date", "hatchdate", "petsa_ng_pagpisa"])
+    const statusKey = findHeader(["status", "estado"])
+    const coopKey = findHeader(["coop", "kulungan"])
+    const sireKey = findHeader(["sire", "father", "ama"])
+    const damKey = findHeader(["dam", "mother", "ina"])
+    const bandKey = findHeader(["band", "band_number", "tatak"])
+    const breedNameKey = findHeader(["breed", "breed_name", "lahi"])
+    const breedCodeKey = findHeader(["breed_code", "breedcode"])
+    const colorKey = findHeader(["color", "kulay"])
+    const notesKey = findHeader(["notes", "tala"])
+
+    if (!sexKey) {
+      throw new Error("Excel file must have a 'sex' column (MALE, FEMALE, or UNKNOWN)")
+    }
+    if (!hatchDateKey) {
+      throw new Error("Excel file must have a 'hatch_date' column (YYYY-MM-DD format)")
+    }
+
+    const rows: ParsedRow[] = []
+
+    jsonData.forEach((data, index) => {
+      const getValue = (key: string | undefined): string => {
+        if (!key) return ""
+        const value = data[key]
+        return value !== undefined && value !== null ? String(value).trim() : ""
+      }
+
+      // Handle Excel date formatting
+      let hatchDate = getValue(hatchDateKey)
+      // If it looks like a date number from Excel, try to convert it
+      if (/^\d+$/.test(hatchDate) && parseInt(hatchDate) > 30000) {
+        // Excel serial date
+        const excelDate = XLSX.SSF.parse_date_code(parseInt(hatchDate))
+        if (excelDate) {
+          hatchDate = `${excelDate.y}-${String(excelDate.m).padStart(2, '0')}-${String(excelDate.d).padStart(2, '0')}`
+        }
+      }
+
+      const row: ParsedRow = {
+        rowNumber: index + 2, // +2 because row 1 is header, and we're 0-indexed
+        name: getValue(nameKey),
+        sex: getValue(sexKey).toUpperCase(),
+        hatchDate: hatchDate,
+        status: getValue(statusKey).toUpperCase() || "ACTIVE",
+        coopName: getValue(coopKey),
+        sireName: getValue(sireKey),
+        damName: getValue(damKey),
+        bandNumber: getValue(bandKey),
+        breedName: getValue(breedNameKey),
+        breedCode: getValue(breedCodeKey).toUpperCase(),
+        color: getValue(colorKey),
+        notes: getValue(notesKey),
+      }
+
+      // Validate sex
+      if (!["MALE", "FEMALE", "UNKNOWN"].includes(row.sex)) {
+        row.error = `Invalid sex: "${row.sex}". Must be MALE, FEMALE, or UNKNOWN`
+      }
+
+      // Validate date
+      if (row.hatchDate && !/^\d{4}-\d{2}-\d{2}$/.test(row.hatchDate)) {
+        row.error = `Invalid date format: "${row.hatchDate}". Use YYYY-MM-DD`
+      }
+
+      // Validate status
+      const validStatuses = ["ACTIVE", "SOLD", "DECEASED", "CULLED", "LOST", "BREEDING", "RETIRED"]
+      if (row.status && !validStatuses.includes(row.status)) {
+        row.error = `Invalid status: "${row.status}"`
+      }
+
+      rows.push(row)
+    })
+
+    return rows
+  }
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
 
-    if (!selectedFile.name.endsWith(".csv")) {
-      setParseError("Please select a CSV file")
+    const fileName = selectedFile.name.toLowerCase()
+    const isCSV = fileName.endsWith(".csv")
+    const isExcel = fileName.endsWith(".xlsx") || fileName.endsWith(".xls")
+
+    if (!isCSV && !isExcel) {
+      setParseError("Please select a CSV or Excel file (.csv, .xlsx, .xls)")
       return
     }
 
@@ -156,11 +270,17 @@ export default function ImportBirdsPage() {
     setParsing(true)
 
     try {
-      const content = await selectedFile.text()
-      const parsed = parseCSV(content)
-      setParsedData(parsed)
+      if (isCSV) {
+        const content = await selectedFile.text()
+        const parsed = parseCSV(content)
+        setParsedData(parsed)
+      } else {
+        const buffer = await selectedFile.arrayBuffer()
+        const parsed = parseExcel(buffer)
+        setParsedData(parsed)
+      }
     } catch (err) {
-      setParseError(err instanceof Error ? err.message : "Failed to parse CSV")
+      setParseError(err instanceof Error ? err.message : "Failed to parse file")
       setParsedData([])
     } finally {
       setParsing(false)
@@ -204,18 +324,28 @@ export default function ImportBirdsPage() {
     }
   }
 
-  const downloadTemplate = () => {
-    const template = `name,sex,hatch_date,status,coop,breed,breed_code,color,sire,dam,band_number,notes
-Rooster 1,MALE,2024-01-15,ACTIVE,Coop A,Rhode Island Red,RIR,Red,Father Bird,Mother Bird,BAND001,Imported bird
-Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
+  const downloadTemplate = (format: "csv" | "xlsx") => {
+    const headers = ["name", "sex", "hatch_date", "status", "coop", "breed", "breed_code", "color", "sire", "dam", "band_number", "notes"]
+    const sampleData = [
+      ["Rooster 1", "MALE", "2024-01-15", "ACTIVE", "Coop A", "Rhode Island Red", "RIR", "Red", "Father Bird", "Mother Bird", "BAND001", "Imported bird"],
+      ["Hen 1", "FEMALE", "2024-02-20", "ACTIVE", "Coop B", "Aseel", "ASEL", "Black", "", "", "BAND002", ""],
+    ]
 
-    const blob = new Blob([template], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "birds_import_template.csv"
-    a.click()
-    URL.revokeObjectURL(url)
+    if (format === "csv") {
+      const csvContent = [headers.join(","), ...sampleData.map(row => row.join(","))].join("\n")
+      const blob = new Blob([csvContent], { type: "text/csv" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "birds_import_template.csv"
+      a.click()
+      URL.revokeObjectURL(url)
+    } else {
+      const worksheet = XLSX.utils.aoa_to_sheet([headers, ...sampleData])
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Birds")
+      XLSX.writeFile(workbook, "birds_import_template.xlsx")
+    }
   }
 
   const clearFile = () => {
@@ -246,8 +376,8 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
           </h1>
           <p className="text-muted-foreground">
             {language === "tl"
-              ? "Mag-upload ng CSV file para mag-import ng maraming ibon"
-              : "Upload a CSV file to import multiple birds at once"}
+              ? "Mag-upload ng CSV o Excel file para mag-import ng maraming ibon"
+              : "Upload a CSV or Excel file to import multiple birds at once"}
           </p>
         </div>
       </div>
@@ -328,7 +458,7 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-gray-700 flex items-center gap-2">
             <FileSpreadsheet className="h-5 w-5 text-orange-500" />
-            {language === "tl" ? "Template ng CSV" : "CSV Template"}
+            {language === "tl" ? "Template ng File" : "File Template"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -337,14 +467,24 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
               ? "I-download ang template na ito at punan ng data ng iyong mga ibon."
               : "Download this template and fill it with your bird data."}
           </p>
-          <Button
-            onClick={downloadTemplate}
-            variant="outline"
-            className="rounded-xl border-2 border-orange-100"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            {language === "tl" ? "I-download ang Template" : "Download Template"}
-          </Button>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => downloadTemplate("xlsx")}
+              variant="outline"
+              className="rounded-xl border-2 border-orange-100"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Excel Template
+            </Button>
+            <Button
+              onClick={() => downloadTemplate("csv")}
+              variant="outline"
+              className="rounded-xl border-2 border-orange-100"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              CSV Template
+            </Button>
+          </div>
 
           <div className="mt-4 p-4 bg-orange-50 rounded-xl">
             <p className="text-sm font-medium text-gray-700 mb-2">
@@ -407,7 +547,7 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-gray-700 flex items-center gap-2">
             <Upload className="h-5 w-5 text-orange-500" />
-            {language === "tl" ? "Mag-upload ng CSV" : "Upload CSV"}
+            {language === "tl" ? "Mag-upload ng File" : "Upload File"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -421,12 +561,12 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
                   </span>{" "}
                   {language === "tl" ? "o i-drag at i-drop" : "or drag and drop"}
                 </p>
-                <p className="text-xs text-muted-foreground">CSV files only</p>
+                <p className="text-xs text-muted-foreground">CSV or Excel files (.csv, .xlsx, .xls)</p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls"
                 onChange={handleFileSelect}
                 className="hidden"
               />
