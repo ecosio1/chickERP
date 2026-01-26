@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -14,29 +14,36 @@ const createCoopSchema = z.object({
 export async function GET() {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
-    const coops = await prisma.coop.findMany({
-      include: {
-        _count: {
-          select: { birds: true },
-        },
-        birds: {
-          where: { status: "ACTIVE" },
-          select: {
-            id: true,
-            name: true,
-            sex: true,
-          },
-          take: 5,
-        },
-      },
-      orderBy: { name: "asc" },
+    // Get coops with birds
+    const { data: coops, error } = await supabase
+      .from('coops')
+      .select(`
+        *,
+        birds(id, name, sex, status)
+      `)
+      .order('name', { ascending: true })
+
+    if (error) {
+      console.error("GET /api/coops error:", error)
+      return errorResponse("Failed to fetch coops", 500)
+    }
+
+    // Transform to add occupancy counts and filter birds
+    const coopsWithOccupancy = (coops || []).map((coop) => {
+      const activeBirds = coop.birds?.filter((b: { status: string }) => b.status === "ACTIVE") || []
+      return {
+        ...coop,
+        _count: { birds: activeBirds.length },
+        birds: activeBirds.slice(0, 5).map((b: { id: string; name: string | null; sex: string }) => ({
+          id: b.id,
+          name: b.name,
+          sex: b.sex,
+        })),
+        currentOccupancy: activeBirds.length,
+      }
     })
-
-    const coopsWithOccupancy = coops.map((coop) => ({
-      ...coop,
-      currentOccupancy: coop._count.birds,
-    }))
 
     return successResponse(coopsWithOccupancy)
   } catch (error) {
@@ -51,19 +58,27 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
     const body = await req.json()
     const data = createCoopSchema.parse(body)
 
-    const coop = await prisma.coop.create({
-      data: {
+    const { data: coop, error } = await supabase
+      .from('coops')
+      .insert({
         name: data.name,
         capacity: data.capacity,
-        coopType: data.coopType,
+        coop_type: data.coopType,
         status: data.status || "ACTIVE",
         notes: data.notes,
-      },
-    })
+      })
+      .select()
+      .single()
+
+    if (error || !coop) {
+      console.error("POST /api/coops error:", error)
+      return errorResponse("Failed to create coop", 500)
+    }
 
     return successResponse(coop, 201)
   } catch (error) {

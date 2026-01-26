@@ -1,12 +1,16 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
+import type { Database } from "@/types/database.types"
+
+type BirdStatus = Database['public']['Enums']['bird_status']
+type BirdSex = Database['public']['Enums']['bird_sex']
 
 const createBirdSchema = z.object({
   name: z.string().nullable().optional(),
   sex: z.enum(["MALE", "FEMALE", "UNKNOWN"]),
-  hatchDate: z.string().transform((str) => new Date(str)),
+  hatchDate: z.string(),
   status: z.enum(["ACTIVE", "SOLD", "DECEASED", "CULLED", "LOST", "BREEDING", "RETIRED", "ARCHIVED"]).optional(),
   sireId: z.string().nullable().optional(),
   damId: z.string().nullable().optional(),
@@ -30,6 +34,7 @@ const createBirdSchema = z.object({
 export async function GET(req: NextRequest) {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
     const { searchParams } = new URL(req.url)
     const search = searchParams.get("search")
@@ -40,117 +45,77 @@ export async function GET(req: NextRequest) {
     const color = searchParams.get("color")
     const breedId = searchParams.get("breedId")
     const sourceFarmId = searchParams.get("sourceFarmId")
-    const ageMin = searchParams.get("ageMin") // minimum age in months
-    const ageMax = searchParams.get("ageMax") // maximum age in months
+    const ageMin = searchParams.get("ageMin")
+    const ageMax = searchParams.get("ageMax")
     const limit = parseInt(searchParams.get("limit") || "50")
     const offset = parseInt(searchParams.get("offset") || "0")
 
-    // Build where clause
-    const where: Record<string, unknown> = {}
-    const andConditions: Record<string, unknown>[] = []
-
-    if (status) {
-      where.status = status
+    // Get breed IDs linked to source farm if filtering
+    let breedIdsToFilter: string[] = []
+    if (sourceFarmId) {
+      const { data: linkedBreeds } = await supabase
+        .from('breed_source_farms')
+        .select('breed_id')
+        .eq('source_farm_id', sourceFarmId)
+      breedIdsToFilter = (linkedBreeds || []).map((b) => b.breed_id)
     }
 
-    if (sex) {
-      where.sex = sex
-    }
+    // Build query - simplified to avoid self-join issues
+    let query = supabase
+      .from('birds')
+      .select(`
+        *,
+        identifiers:bird_identifiers(*),
+        coop:coops(id, name),
+        photos:bird_photos(*)
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false })
 
-    if (coopId) {
-      where.coopId = coopId
-    }
-
-    if (color) {
-      where.color = color
-    }
+    // Apply filters
+    if (status) query = query.eq('status', status as BirdStatus)
+    if (sex) query = query.eq('sex', sex as BirdSex)
+    if (coopId) query = query.eq('coop_id', coopId)
+    if (color) query = query.eq('color', color)
 
     if (parentId) {
-      where.OR = [
-        { sireId: parentId },
-        { damId: parentId },
-      ]
+      query = query.or(`sire_id.eq.${parentId},dam_id.eq.${parentId}`)
     }
 
-    // Search by name or any identifier
     if (search) {
-      andConditions.push({
-        OR: [
-          { name: { contains: search, mode: "insensitive" } },
-          { identifiers: { some: { idValue: { contains: search, mode: "insensitive" } } } },
-        ],
-      })
+      query = query.or(`name.ilike.%${search}%`)
     }
 
-    // Age range filter (based on hatchDate)
+    // Age range filter
     if (ageMin || ageMax) {
       const now = new Date()
-      const hatchDateFilter: Record<string, Date> = {}
-
       if (ageMin) {
-        // Birds at least X months old = hatched before X months ago
         const maxHatchDate = new Date(now)
         maxHatchDate.setMonth(maxHatchDate.getMonth() - parseInt(ageMin))
-        hatchDateFilter.lte = maxHatchDate
+        query = query.lte('hatch_date', maxHatchDate.toISOString())
       }
-
       if (ageMax) {
-        // Birds at most X months old = hatched after X months ago
         const minHatchDate = new Date(now)
         minHatchDate.setMonth(minHatchDate.getMonth() - parseInt(ageMax))
-        hatchDateFilter.gte = minHatchDate
+        query = query.gte('hatch_date', minHatchDate.toISOString())
       }
-
-      where.hatchDate = hatchDateFilter
     }
 
-    // Get all birds first for breedComposition and sourceFarm filtering
-    // These filters work on JSON data and need post-filtering
-    let breedIdsToFilter: string[] = []
-
-    // If filtering by source farm, get the breed IDs linked to that farm
-    if (sourceFarmId) {
-      const linkedBreeds = await prisma.breedSourceFarm.findMany({
-        where: { sourceFarmId },
-        select: { breedId: true },
-      })
-      breedIdsToFilter = linkedBreeds.map((b) => b.breedId)
-    }
-
-    // Combine AND conditions
-    if (andConditions.length > 0) {
-      where.AND = andConditions
-    }
-
-    // For breed/sourceFarm filters, we need to fetch more and filter in-memory
-    // because breedComposition is stored as JSON
+    // For breed/sourceFarm filters, fetch more for post-filtering
     const needsPostFilter = breedId || breedIdsToFilter.length > 0
     const fetchLimit = needsPostFilter ? 1000 : limit
     const fetchOffset = needsPostFilter ? 0 : offset
 
-    let [birds, total] = await Promise.all([
-      prisma.bird.findMany({
-        where,
-        include: {
-          identifiers: true,
-          coop: { select: { id: true, name: true } },
-          sire: { select: { id: true, name: true, identifiers: true } },
-          dam: { select: { id: true, name: true, identifiers: true } },
-          photos: { where: { isPrimary: true }, take: 1 },
-          _count: {
-            select: {
-              eggRecords: true,
-              offspringAsSire: true,
-              offspringAsDam: true,
-            },
-          },
-        },
-        orderBy: { createdAt: "desc" },
-        take: fetchLimit,
-        skip: fetchOffset,
-      }),
-      prisma.bird.count({ where }),
-    ])
+    query = query.range(fetchOffset, fetchOffset + fetchLimit - 1)
+
+    const { data: birds, count, error } = await query
+
+    if (error) {
+      console.error("GET /api/birds error:", error)
+      return errorResponse("Failed to fetch birds", 500)
+    }
+
+    let filteredBirds = birds || []
+    let total = count || 0
 
     // Post-filter for breed composition (JSON field)
     if (breedId || breedIdsToFilter.length > 0) {
@@ -158,18 +123,54 @@ export async function GET(req: NextRequest) {
         ? [breedId, ...breedIdsToFilter]
         : breedIdsToFilter
 
-      birds = birds.filter((bird) => {
-        const composition = bird.breedComposition as Array<{ breedId: string; percentage: number }> | null
+      filteredBirds = filteredBirds.filter((bird) => {
+        const composition = bird.breed_composition as Array<{ breedId: string; percentage: number }> | null
         if (!composition || !Array.isArray(composition)) return false
         return composition.some((bc) => filterBreedIds.includes(bc.breedId))
       })
 
-      // Update total and apply pagination
-      total = birds.length
-      birds = birds.slice(offset, offset + limit)
+      total = filteredBirds.length
+      filteredBirds = filteredBirds.slice(offset, offset + limit)
     }
 
-    return successResponse({ birds, total, limit, offset })
+    // Search by identifier value (post-filter since it's a nested query)
+    if (search) {
+      filteredBirds = filteredBirds.filter((bird) => {
+        const nameMatch = bird.name?.toLowerCase().includes(search.toLowerCase())
+        const idMatch = bird.identifiers?.some((id: { id_value: string }) =>
+          id.id_value?.toLowerCase().includes(search.toLowerCase())
+        )
+        return nameMatch || idMatch
+      })
+    }
+
+    // Fetch parent info separately to avoid self-join issues
+    const parentIds = new Set<string>()
+    filteredBirds.forEach((bird) => {
+      if (bird.sire_id) parentIds.add(bird.sire_id)
+      if (bird.dam_id) parentIds.add(bird.dam_id)
+    })
+
+    let parentMap: Record<string, { id: string; name: string | null }> = {}
+    if (parentIds.size > 0) {
+      const { data: parents } = await supabase
+        .from('birds')
+        .select('id, name')
+        .in('id', Array.from(parentIds))
+
+      if (parents) {
+        parentMap = Object.fromEntries(parents.map((p) => [p.id, p]))
+      }
+    }
+
+    // Add parent info to birds
+    const birdsWithParents = filteredBirds.map((bird) => ({
+      ...bird,
+      sire: bird.sire_id ? parentMap[bird.sire_id] || null : null,
+      dam: bird.dam_id ? parentMap[bird.dam_id] || null : null,
+    }))
+
+    return successResponse({ birds: birdsWithParents, total, limit, offset })
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
       return errorResponse("Unauthorized", 401)
@@ -183,8 +184,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
 
-    // Only OWNER can create birds
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can add birds", 403)
     }
@@ -192,77 +193,104 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const data = createBirdSchema.parse(body)
 
-    // Validate parent references exist
+    // Validate parent references
     if (data.sireId) {
-      const sire = await prisma.bird.findUnique({ where: { id: data.sireId } })
+      const { data: sire } = await supabase
+        .from('birds')
+        .select('id, sex')
+        .eq('id', data.sireId)
+        .single()
       if (!sire) return errorResponse("Father bird not found", 400)
       if (sire.sex !== "MALE") return errorResponse("Father must be male", 400)
     }
 
     if (data.damId) {
-      const dam = await prisma.bird.findUnique({ where: { id: data.damId } })
+      const { data: dam } = await supabase
+        .from('birds')
+        .select('id, sex')
+        .eq('id', data.damId)
+        .single()
       if (!dam) return errorResponse("Mother bird not found", 400)
       if (dam.sex !== "FEMALE") return errorResponse("Mother must be female", 400)
     }
 
-    // Create bird with identifiers in transaction
-    const bird = await prisma.$transaction(async (tx) => {
-      const newBird = await tx.bird.create({
-        data: {
-          name: data.name,
-          sex: data.sex,
-          hatchDate: data.hatchDate,
-          status: data.status || "ACTIVE",
-          sireId: data.sireId,
-          damId: data.damId,
-          coopId: data.coopId,
-          color: data.color,
-          combType: data.combType,
-          earlyLifeNotes: data.earlyLifeNotes,
-          breedComposition: data.breedComposition || [],
-          breedOverride: data.breedOverride || false,
-          createdById: session.user.id,
-        },
+    // Create bird
+    const { data: newBird, error: birdError } = await supabase
+      .from('birds')
+      .insert({
+        name: data.name,
+        sex: data.sex,
+        hatch_date: data.hatchDate,
+        status: data.status || "ACTIVE",
+        sire_id: data.sireId,
+        dam_id: data.damId,
+        coop_id: data.coopId,
+        color: data.color,
+        comb_type: data.combType,
+        early_life_notes: data.earlyLifeNotes,
+        breed_composition: data.breedComposition || [],
+        breed_override: data.breedOverride || false,
+        created_by: session.user.id,
       })
+      .select()
+      .single()
 
-      // Add identifiers if provided
-      if (data.identifiers && data.identifiers.length > 0) {
-        await tx.birdIdentifier.createMany({
-          data: data.identifiers.map((id) => ({
-            birdId: newBird.id,
-            idType: id.idType,
-            idValue: id.idValue,
-            notes: id.notes,
-          })),
-        })
+    if (birdError || !newBird) {
+      console.error("Create bird error:", birdError)
+      return errorResponse("Failed to create bird", 500)
+    }
+
+    // Add identifiers if provided
+    if (data.identifiers && data.identifiers.length > 0) {
+      const { error: idError } = await supabase
+        .from('bird_identifiers')
+        .insert(data.identifiers.map((id) => ({
+          bird_id: newBird.id,
+          id_type: id.idType,
+          id_value: id.idValue,
+          notes: id.notes,
+        })))
+
+      if (idError) {
+        console.error("Create identifiers error:", idError)
       }
+    }
 
-      // Create coop assignment record if assigned
-      if (data.coopId) {
-        await tx.coopAssignment.create({
-          data: {
-            birdId: newBird.id,
-            coopId: data.coopId,
-            assignedAt: new Date(),
-          },
+    // Create coop assignment record if assigned
+    if (data.coopId) {
+      await supabase
+        .from('coop_assignments')
+        .insert({
+          bird_id: newBird.id,
+          coop_id: data.coopId,
+          assigned_at: new Date().toISOString(),
         })
-      }
-
-      return newBird
-    })
+    }
 
     // Fetch complete bird with relations
-    const completeBird = await prisma.bird.findUnique({
-      where: { id: bird.id },
-      include: {
-        identifiers: true,
-        coop: { select: { id: true, name: true } },
-        sire: { select: { id: true, name: true } },
-        dam: { select: { id: true, name: true } },
-      },
-    })
+    const { data: completeBird } = await supabase
+      .from('birds')
+      .select(`
+        *,
+        identifiers:bird_identifiers(*),
+        coop:coops(id, name)
+      `)
+      .eq('id', newBird.id)
+      .single()
 
-    return successResponse(completeBird, 201)
+    // Fetch parent info separately
+    let sire = null
+    let dam = null
+    if (completeBird?.sire_id) {
+      const { data } = await supabase.from('birds').select('id, name').eq('id', completeBird.sire_id).single()
+      sire = data
+    }
+    if (completeBird?.dam_id) {
+      const { data } = await supabase.from('birds').select('id, name').eq('id', completeBird.dam_id).single()
+      dam = data
+    }
+
+    return successResponse({ ...completeBird, sire, dam }, 201)
   } catch (error) {
     return handleApiError(error, "POST /api/birds")
   }

@@ -16,7 +16,7 @@ import {
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
 import { formatNumber } from "@/lib/utils"
-import { useSession } from "next-auth/react"
+import { useAuth } from "@/components/providers/auth-provider"
 
 interface DashboardData {
   summary: {
@@ -43,7 +43,7 @@ interface DashboardData {
 
 export default function DashboardPage() {
   const { t, formatAge } = useLanguage()
-  const { data: session } = useSession()
+  const { profile } = useAuth()
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -97,7 +97,7 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl lg:text-3xl font-bold text-gray-800">
-            {t("dashboard.welcome")}, {session?.user?.name?.split(" ")[0]}!
+            {t("dashboard.welcome")}, {profile?.name?.split(" ")[0]}!
           </h1>
           <p className="text-muted-foreground mt-1">
             {new Date().toLocaleDateString("en-US", {

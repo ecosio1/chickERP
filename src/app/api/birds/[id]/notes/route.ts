@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -15,16 +15,23 @@ export async function GET(
   try {
     await requireAuth()
     const { id: birdId } = await params
+    const supabase = await createClient()
 
-    const notes = await prisma.birdNote.findMany({
-      where: { birdId },
-      include: {
-        createdBy: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    })
+    const { data: notes, error } = await supabase
+      .from('bird_notes')
+      .select(`
+        *,
+        created_by:profiles!bird_notes_created_by_fkey(id, name)
+      `)
+      .eq('bird_id', birdId)
+      .order('created_at', { ascending: false })
 
-    return successResponse(notes)
+    if (error) {
+      console.error("Get notes error:", error)
+      return errorResponse("Failed to fetch notes", 500)
+    }
+
+    return successResponse(notes || [])
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
       return errorResponse("Unauthorized", 401)
@@ -42,26 +49,39 @@ export async function POST(
   try {
     const session = await requireAuth()
     const { id: birdId } = await params
+    const supabase = await createClient()
 
     const body = await req.json()
     const data = noteSchema.parse(body)
 
     // Check if bird exists
-    const bird = await prisma.bird.findUnique({ where: { id: birdId } })
-    if (!bird) {
+    const { data: bird, error: birdError } = await supabase
+      .from('birds')
+      .select('id')
+      .eq('id', birdId)
+      .single()
+
+    if (birdError || !bird) {
       return errorResponse("Bird not found", 404)
     }
 
-    const note = await prisma.birdNote.create({
-      data: {
-        birdId,
+    const { data: note, error: createError } = await supabase
+      .from('bird_notes')
+      .insert({
+        bird_id: birdId,
         content: data.content,
-        createdById: session.user.id,
-      },
-      include: {
-        createdBy: { select: { id: true, name: true } },
-      },
-    })
+        created_by: session.user.id,
+      })
+      .select(`
+        *,
+        created_by:profiles!bird_notes_created_by_fkey(id, name)
+      `)
+      .single()
+
+    if (createError) {
+      console.error("Create note error:", createError)
+      return errorResponse("Failed to create note", 500)
+    }
 
     return successResponse(note, 201)
   } catch (error) {

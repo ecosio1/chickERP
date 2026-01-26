@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -14,18 +14,32 @@ export async function DELETE(
 ) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can delete breeds", 403)
     }
 
-    const breed = await prisma.breed.findUnique({ where: { id } })
-    if (!breed) {
+    const { data: breed, error: findError } = await supabase
+      .from('breeds')
+      .select('id')
+      .eq('id', id)
+      .single()
+
+    if (findError || !breed) {
       return errorResponse("Breed not found", 404)
     }
 
-    await prisma.breed.delete({ where: { id } })
+    const { error: deleteError } = await supabase
+      .from('breeds')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error("DELETE /api/breeds/[id] error:", deleteError)
+      return errorResponse("Failed to delete breed", 500)
+    }
 
     return successResponse({ message: "Breed deleted" })
   } catch (error) {
@@ -41,26 +55,28 @@ export async function GET(
 ) {
   try {
     await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
-    const breed = await prisma.breed.findUnique({
-      where: { id },
-      include: {
-        sourceFarms: {
-          include: {
-            sourceFarm: true,
-          },
-        },
-      },
-    })
-    if (!breed) {
+    const { data: breed, error } = await supabase
+      .from('breeds')
+      .select(`
+        *,
+        sourceFarms:breed_source_farms(
+          sourceFarm:source_farms(*)
+        )
+      `)
+      .eq('id', id)
+      .single()
+
+    if (error || !breed) {
       return errorResponse("Breed not found", 404)
     }
 
     // Transform to flatten sourceFarms
     const transformed = {
       ...breed,
-      sourceFarms: breed.sourceFarms.map((sf) => sf.sourceFarm),
+      sourceFarms: breed.sourceFarms?.map((sf: { sourceFarm: unknown }) => sf.sourceFarm) || [],
     }
 
     return successResponse(transformed)
@@ -77,50 +93,67 @@ export async function PATCH(
 ) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can update breeds", 403)
     }
 
-    const breed = await prisma.breed.findUnique({ where: { id } })
-    if (!breed) {
+    const { data: breed, error: findError } = await supabase
+      .from('breeds')
+      .select('id')
+      .eq('id', id)
+      .single()
+
+    if (findError || !breed) {
       return errorResponse("Breed not found", 404)
     }
 
     const body = await req.json()
     const data = updateBreedSchema.parse(body)
 
-    // Delete existing farm links and create new ones
-    await prisma.$transaction([
-      prisma.breedSourceFarm.deleteMany({
-        where: { breedId: id },
-      }),
-      ...data.sourceFarmIds.map((farmId) =>
-        prisma.breedSourceFarm.create({
-          data: {
-            breedId: id,
-            sourceFarmId: farmId,
-          },
-        })
-      ),
-    ])
+    // Delete existing farm links
+    const { error: deleteError } = await supabase
+      .from('breed_source_farms')
+      .delete()
+      .eq('breed_id', id)
+
+    if (deleteError) {
+      console.error("Delete breed farm links error:", deleteError)
+      return errorResponse("Failed to update breed", 500)
+    }
+
+    // Create new farm links
+    if (data.sourceFarmIds.length > 0) {
+      const { error: insertError } = await supabase
+        .from('breed_source_farms')
+        .insert(data.sourceFarmIds.map((farmId) => ({
+          breed_id: id,
+          source_farm_id: farmId,
+        })))
+
+      if (insertError) {
+        console.error("Create breed farm links error:", insertError)
+        return errorResponse("Failed to update breed", 500)
+      }
+    }
 
     // Fetch updated breed
-    const updatedBreed = await prisma.breed.findUnique({
-      where: { id },
-      include: {
-        sourceFarms: {
-          include: {
-            sourceFarm: true,
-          },
-        },
-      },
-    })
+    const { data: updatedBreed } = await supabase
+      .from('breeds')
+      .select(`
+        *,
+        sourceFarms:breed_source_farms(
+          sourceFarm:source_farms(*)
+        )
+      `)
+      .eq('id', id)
+      .single()
 
     const transformed = {
       ...updatedBreed,
-      sourceFarms: updatedBreed?.sourceFarms.map((sf) => sf.sourceFarm) || [],
+      sourceFarms: updatedBreed?.sourceFarms?.map((sf: { sourceFarm: unknown }) => sf.sourceFarm) || [],
     }
 
     return successResponse(transformed)

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -19,40 +19,38 @@ export async function GET(req: NextRequest) {
   try {
     await requireAuth()
 
+    const supabase = await createClient()
+
     const { searchParams } = new URL(req.url)
     const birdId = searchParams.get("birdId")
     const startDate = searchParams.get("startDate")
     const endDate = searchParams.get("endDate")
     const limit = parseInt(searchParams.get("limit") || "100")
 
-    const where: Record<string, unknown> = {}
+    let query = supabase
+      .from('weight_records')
+      .select(`
+        *,
+        bird:birds(id, name, identifiers),
+        recorded_by:profiles!weight_records_recorded_by_fkey(id, name)
+      `)
+      .order('date', { ascending: false })
+      .limit(limit)
 
     if (birdId) {
-      where.birdId = birdId
+      query = query.eq('bird_id', birdId)
     }
 
     if (startDate && endDate) {
-      where.date = {
-        gte: new Date(startDate),
-        lte: new Date(endDate),
-      }
+      query = query.gte('date', startDate).lte('date', endDate)
     }
 
-    const weights = await prisma.weightRecord.findMany({
-      where,
-      include: {
-        bird: {
-          select: {
-            id: true,
-            name: true,
-            identifiers: true,
-          },
-        },
-        recordedBy: { select: { id: true, name: true } },
-      },
-      orderBy: { date: "desc" },
-      take: limit,
-    })
+    const { data: weights, error } = await query
+
+    if (error) {
+      console.error("GET /api/weights error:", error)
+      return errorResponse("Internal server error", 500)
+    }
 
     return successResponse(weights)
   } catch (error) {
@@ -69,31 +67,43 @@ export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
 
+    const supabase = await createClient()
+
     const body = await req.json()
     const data = createWeightSchema.parse(body)
 
     // Verify bird exists
-    const bird = await prisma.bird.findUnique({ where: { id: data.birdId } })
-    if (!bird) {
+    const { data: bird, error: findError } = await supabase
+      .from('birds')
+      .select('id')
+      .eq('id', data.birdId)
+      .single()
+
+    if (findError || !bird) {
       return errorResponse("Bird not found", 404)
     }
 
-    const weight = await prisma.weightRecord.create({
-      data: {
-        birdId: data.birdId,
-        date: data.date,
-        weightGrams: data.weightGrams,
+    const { data: weight, error: createError } = await supabase
+      .from('weight_records')
+      .insert({
+        bird_id: data.birdId,
+        date: data.date.toISOString(),
+        weight_grams: data.weightGrams,
         milestone: data.milestone,
         notes: data.notes,
-        recordedById: session.user.id,
-      },
-      include: {
-        bird: {
-          select: { id: true, name: true, identifiers: true },
-        },
-        recordedBy: { select: { id: true, name: true } },
-      },
-    })
+        recorded_by: session.user.id,
+      })
+      .select(`
+        *,
+        bird:birds(id, name, identifiers),
+        recorded_by:profiles!weight_records_recorded_by_fkey(id, name)
+      `)
+      .single()
+
+    if (createError) {
+      console.error("POST /api/weights create error:", createError)
+      return errorResponse("Internal server error", 500)
+    }
 
     return successResponse(weight, 201)
   } catch (error) {

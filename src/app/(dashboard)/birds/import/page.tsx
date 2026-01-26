@@ -41,6 +41,8 @@ interface ImportResult {
   autoCreated?: {
     coops: string[]
     breeds: string[]
+    sires: string[]
+    dams: string[]
   }
 }
 
@@ -277,7 +279,12 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
                   {importResult.failed > 0 &&
                     `, ${importResult.failed} ${language === "tl" ? "nabigo" : "failed"}`}
                 </p>
-                {importResult.autoCreated && (importResult.autoCreated.coops.length > 0 || importResult.autoCreated.breeds.length > 0) && (
+                {importResult.autoCreated && (
+                  importResult.autoCreated.coops.length > 0 ||
+                  importResult.autoCreated.breeds.length > 0 ||
+                  importResult.autoCreated.sires?.length > 0 ||
+                  importResult.autoCreated.dams?.length > 0
+                ) && (
                   <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                     <p className="text-sm font-medium text-blue-700 mb-1">
                       {language === "tl" ? "Awtomatikong Nalikha:" : "Auto-Created:"}
@@ -292,6 +299,18 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
                       <p className="text-sm text-blue-600">
                         {language === "tl" ? "Mga Lahi: " : "Breeds: "}
                         {importResult.autoCreated.breeds.join(", ")}
+                      </p>
+                    )}
+                    {importResult.autoCreated.sires && importResult.autoCreated.sires.length > 0 && (
+                      <p className="text-sm text-blue-600">
+                        {language === "tl" ? "Mga Ama (Sire): " : "Sires: "}
+                        {importResult.autoCreated.sires.join(", ")}
+                      </p>
+                    )}
+                    {importResult.autoCreated.dams && importResult.autoCreated.dams.length > 0 && (
+                      <p className="text-sm text-blue-600">
+                        {language === "tl" ? "Mga Ina (Dam): " : "Dams: "}
+                        {importResult.autoCreated.dams.join(", ")}
                       </p>
                     )}
                   </div>
@@ -381,10 +400,10 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
                 <code className="bg-orange-100 px-1 rounded">color</code> - Bird color
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">sire</code> - Father bird name (must exist)
+                <code className="bg-orange-100 px-1 rounded">sire</code> - Father bird name (auto-created if not exists)
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">dam</code> - Mother bird name (must exist)
+                <code className="bg-orange-100 px-1 rounded">dam</code> - Mother bird name (auto-created if not exists)
               </li>
               <li>
                 <code className="bg-orange-100 px-1 rounded">band_number</code> - Band/ring identifier
@@ -395,8 +414,8 @@ Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
             </ul>
             <p className="text-xs text-green-600 mt-3">
               {language === "tl"
-                ? "* Awtomatikong nalilikha ang mga coop at breed na hindi pa umiiral"
-                : "* Coops and breeds that don't exist will be automatically created"}
+                ? "* Awtomatikong nalilikha ang mga coop, breed, sire, at dam na hindi pa umiiral"
+                : "* Coops, breeds, sires, and dams that don't exist will be automatically created"}
             </p>
           </div>
         </CardContent>

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -15,22 +15,27 @@ const createBreedSchema = z.object({
 export async function GET() {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
-    const breeds = await prisma.breed.findMany({
-      orderBy: { name: "asc" },
-      include: {
-        sourceFarms: {
-          include: {
-            sourceFarm: true,
-          },
-        },
-      },
-    })
+    const { data: breeds, error } = await supabase
+      .from('breeds')
+      .select(`
+        *,
+        sourceFarms:breed_source_farms(
+          sourceFarm:source_farms(*)
+        )
+      `)
+      .order('name', { ascending: true })
+
+    if (error) {
+      console.error("GET /api/breeds error:", error)
+      return errorResponse("Failed to fetch breeds", 500)
+    }
 
     // Transform to flatten sourceFarms
-    const transformed = breeds.map((breed) => ({
+    const transformed = (breeds || []).map((breed) => ({
       ...breed,
-      sourceFarms: breed.sourceFarms.map((sf) => sf.sourceFarm),
+      sourceFarms: breed.sourceFarms?.map((sf: { sourceFarm: unknown }) => sf.sourceFarm) || [],
     }))
 
     return successResponse(transformed)
@@ -47,6 +52,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can manage breeds", 403)
@@ -55,47 +61,75 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const data = createBreedSchema.parse(body)
 
-    // Check for duplicates
-    const existing = await prisma.breed.findFirst({
-      where: {
-        OR: [
-          { name: data.name },
-          { code: data.code.toUpperCase() },
-        ],
-      },
-    })
+    // Check for duplicates by name
+    const { data: existingByName } = await supabase
+      .from('breeds')
+      .select('id')
+      .eq('name', data.name)
+      .single()
 
-    if (existing) {
+    if (existingByName) {
       return errorResponse("Breed with this name or code already exists", 400)
     }
 
-    const breed = await prisma.breed.create({
-      data: {
+    // Check for duplicates by code
+    const { data: existingByCode } = await supabase
+      .from('breeds')
+      .select('id')
+      .eq('code', data.code.toUpperCase())
+      .single()
+
+    if (existingByCode) {
+      return errorResponse("Breed with this name or code already exists", 400)
+    }
+
+    // Create breed
+    const { data: breed, error: breedError } = await supabase
+      .from('breeds')
+      .insert({
         name: data.name,
         code: data.code.toUpperCase(),
         description: data.description,
         varieties: data.varieties || [],
-        sourceFarms: data.sourceFarmIds?.length
-          ? {
-              create: data.sourceFarmIds.map((farmId) => ({
-                sourceFarmId: farmId,
-              })),
-            }
-          : undefined,
-      },
-      include: {
-        sourceFarms: {
-          include: {
-            sourceFarm: true,
-          },
-        },
-      },
-    })
+      })
+      .select()
+      .single()
+
+    if (breedError || !breed) {
+      console.error("Create breed error:", breedError)
+      return errorResponse("Failed to create breed", 500)
+    }
+
+    // Create source farm links if provided
+    if (data.sourceFarmIds && data.sourceFarmIds.length > 0) {
+      const { error: linkError } = await supabase
+        .from('breed_source_farms')
+        .insert(data.sourceFarmIds.map((farmId) => ({
+          breed_id: breed.id,
+          source_farm_id: farmId,
+        })))
+
+      if (linkError) {
+        console.error("Create breed farm links error:", linkError)
+      }
+    }
+
+    // Fetch complete breed with relations
+    const { data: completedBreed } = await supabase
+      .from('breeds')
+      .select(`
+        *,
+        sourceFarms:breed_source_farms(
+          sourceFarm:source_farms(*)
+        )
+      `)
+      .eq('id', breed.id)
+      .single()
 
     // Transform to flatten sourceFarms
     const transformed = {
-      ...breed,
-      sourceFarms: breed.sourceFarms.map((sf) => sf.sourceFarm),
+      ...completedBreed,
+      sourceFarms: completedBreed?.sourceFarms?.map((sf: { sourceFarm: unknown }) => sf.sourceFarm) || [],
     }
 
     return successResponse(transformed, 201)
