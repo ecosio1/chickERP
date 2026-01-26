@@ -24,10 +24,16 @@ import {
   Palette,
   Crown,
   AlertTriangle,
+  Dna,
+  ExternalLink,
+  Save,
+  X,
 } from "lucide-react"
 import { PhotoGallery } from "@/components/birds/PhotoGallery"
 import { RFIDLinkButton } from "@/components/birds/RFIDLinkButton"
+import { BreedCompositionEditor } from "@/components/birds/BreedCompositionEditor"
 import { useLanguage } from "@/hooks/use-language"
+import { calculateChildBreedComposition } from "@/lib/breed-utils"
 import { getColorById } from "@/lib/chicken-colors"
 import { cn } from "@/lib/utils"
 import {
@@ -41,6 +47,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+
+interface BreedCompositionEntry {
+  breedId: string
+  percentage: number
+}
 
 interface BirdDetail {
   id: string
@@ -56,10 +67,20 @@ interface BirdDetail {
   color: string | null
   combType: string | null
   earlyLifeNotes: string | null
-  breedComposition: Record<string, number> | null
+  breedComposition: BreedCompositionEntry[] | null
   breedOverride: boolean
-  sire: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }> } | null
-  dam: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }> } | null
+  sire: {
+    id: string
+    name: string | null
+    identifiers: Array<{ idType: string; idValue: string }>
+    breedComposition: BreedCompositionEntry[] | null
+  } | null
+  dam: {
+    id: string
+    name: string | null
+    identifiers: Array<{ idType: string; idValue: string }>
+    breedComposition: BreedCompositionEntry[] | null
+  } | null
   coop: { id: string; name: string } | null
   identifiers: Array<{ id: string; idType: string; idValue: string }>
   photos: Array<{ id: string; url: string; isPrimary: boolean; caption?: string | null }>
@@ -70,6 +91,12 @@ interface BirdDetail {
   healthIncidents: Array<{ id: string; symptoms: string; outcome: string }>
   offspringAsSire: Array<{ id: string; name: string | null; sex: string; identifiers: Array<{ idType: string; idValue: string }> }>
   offspringAsDam: Array<{ id: string; name: string | null; sex: string; identifiers: Array<{ idType: string; idValue: string }> }>
+}
+
+interface Breed {
+  id: string
+  name: string
+  code: string
 }
 
 const COMB_TYPE_LABELS: Record<string, { en: string; tl: string }> = {
@@ -113,6 +140,11 @@ export default function BirdDetailPage() {
   const [exercises, setExercises] = useState<ExerciseRecord[]>([])
   const [loadingFights, setLoadingFights] = useState(false)
   const [loadingExercises, setLoadingExercises] = useState(false)
+  const [breeds, setBreeds] = useState<Breed[]>([])
+  const [editingBreeds, setEditingBreeds] = useState(false)
+  const [breedComposition, setBreedComposition] = useState<BreedCompositionEntry[]>([])
+  const [breedOverride, setBreedOverride] = useState(false)
+  const [savingBreeds, setSavingBreeds] = useState(false)
 
   useEffect(() => {
     async function fetchBird() {
@@ -121,6 +153,9 @@ export default function BirdDetailPage() {
         if (res.ok) {
           const json = await res.json()
           setBird(json)
+          // Initialize breed composition state
+          setBreedComposition(json.breedComposition || [])
+          setBreedOverride(json.breedOverride || false)
         } else {
           router.push("/birds")
         }
@@ -133,6 +168,14 @@ export default function BirdDetailPage() {
     }
     if (params.id) fetchBird()
   }, [params.id, router])
+
+  // Fetch breeds for the editor
+  useEffect(() => {
+    fetch("/api/breeds")
+      .then((r) => r.json())
+      .then((data) => setBreeds(data || []))
+      .catch(console.error)
+  }, [])
 
   useEffect(() => {
     if (activeTab === "fights" && bird && fights.length === 0 && !loadingFights) {
@@ -163,6 +206,50 @@ export default function BirdDetailPage() {
     } finally {
       setDeleting(false)
     }
+  }
+
+  const handleSaveBreeds = async () => {
+    if (!bird) return
+    setSavingBreeds(true)
+    try {
+      const res = await fetch(`/api/birds/${bird.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          breedComposition,
+          breedOverride,
+        }),
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setBird({ ...bird, breedComposition, breedOverride })
+        setEditingBreeds(false)
+      }
+    } catch (error) {
+      console.error("Failed to save breed composition:", error)
+    } finally {
+      setSavingBreeds(false)
+    }
+  }
+
+  const handleCancelBreedEdit = () => {
+    setBreedComposition(bird?.breedComposition || [])
+    setBreedOverride(bird?.breedOverride || false)
+    setEditingBreeds(false)
+  }
+
+  // Get breed name from ID
+  const getBreedName = (breedId: string) => {
+    const breed = breeds.find((b) => b.id === breedId)
+    return breed ? breed.name : breedId
+  }
+
+  // Format breed composition for display
+  const formatBreedComposition = (composition: BreedCompositionEntry[] | null) => {
+    if (!composition || composition.length === 0) return null
+    return composition
+      .map((b) => `${getBreedName(b.breedId)}: ${b.percentage}%`)
+      .join(", ")
   }
 
   if (loading) {
@@ -452,15 +539,50 @@ export default function BirdDetailPage() {
               </CardHeader>
               <CardContent>
                 {bird.sire ? (
-                  <Link
-                    href={`/birds/${bird.sire.id}`}
-                    className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                      <Bird className="h-5 w-5 text-blue-600" />
-                    </div>
-                    <span className="font-medium">{getDisplayId(bird.sire)}</span>
-                  </Link>
+                  <div className="space-y-2">
+                    <Link
+                      href={`/birds/${bird.sire.id}`}
+                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                        <Bird className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <span className="font-medium">{getDisplayId(bird.sire)}</span>
+                    </Link>
+                    {/* Father's Breed Composition */}
+                    {bird.sire.breedComposition && bird.sire.breedComposition.length > 0 && (
+                      <div className="ml-2 pl-3 border-l-2 border-blue-100">
+                        <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                          <Dna className="h-3 w-3" />
+                          {language === "tl" ? "Lahi" : "Breeds"}
+                        </p>
+                        <p className="text-sm text-gray-700">
+                          {formatBreedComposition(bird.sire.breedComposition)}
+                        </p>
+                        <Link
+                          href={`/birds/${bird.sire.id}/edit`}
+                          className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"
+                        >
+                          <Edit className="h-3 w-3" />
+                          {language === "tl" ? "I-edit ang lahi" : "Edit breeds"}
+                        </Link>
+                      </div>
+                    )}
+                    {(!bird.sire.breedComposition || bird.sire.breedComposition.length === 0) && (
+                      <div className="ml-2 pl-3 border-l-2 border-gray-100">
+                        <p className="text-xs text-gray-400 mb-1">
+                          {language === "tl" ? "Walang lahi" : "No breeds set"}
+                        </p>
+                        <Link
+                          href={`/birds/${bird.sire.id}/edit`}
+                          className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                        >
+                          <Edit className="h-3 w-3" />
+                          {language === "tl" ? "Magdagdag ng lahi" : "Add breeds"}
+                        </Link>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <p className="text-muted-foreground py-3">{t("common.none")}</p>
                 )}
@@ -476,21 +598,165 @@ export default function BirdDetailPage() {
               </CardHeader>
               <CardContent>
                 {bird.dam ? (
-                  <Link
-                    href={`/birds/${bird.dam.id}`}
-                    className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
-                      <Bird className="h-5 w-5 text-pink-600" />
-                    </div>
-                    <span className="font-medium">{getDisplayId(bird.dam)}</span>
-                  </Link>
+                  <div className="space-y-2">
+                    <Link
+                      href={`/birds/${bird.dam.id}`}
+                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
+                        <Bird className="h-5 w-5 text-pink-600" />
+                      </div>
+                      <span className="font-medium">{getDisplayId(bird.dam)}</span>
+                    </Link>
+                    {/* Mother's Breed Composition */}
+                    {bird.dam.breedComposition && bird.dam.breedComposition.length > 0 && (
+                      <div className="ml-2 pl-3 border-l-2 border-pink-100">
+                        <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                          <Dna className="h-3 w-3" />
+                          {language === "tl" ? "Lahi" : "Breeds"}
+                        </p>
+                        <p className="text-sm text-gray-700">
+                          {formatBreedComposition(bird.dam.breedComposition)}
+                        </p>
+                        <Link
+                          href={`/birds/${bird.dam.id}/edit`}
+                          className="text-xs text-pink-600 hover:underline flex items-center gap-1 mt-1"
+                        >
+                          <Edit className="h-3 w-3" />
+                          {language === "tl" ? "I-edit ang lahi" : "Edit breeds"}
+                        </Link>
+                      </div>
+                    )}
+                    {(!bird.dam.breedComposition || bird.dam.breedComposition.length === 0) && (
+                      <div className="ml-2 pl-3 border-l-2 border-gray-100">
+                        <p className="text-xs text-gray-400 mb-1">
+                          {language === "tl" ? "Walang lahi" : "No breeds set"}
+                        </p>
+                        <Link
+                          href={`/birds/${bird.dam.id}/edit`}
+                          className="text-xs text-pink-600 hover:underline flex items-center gap-1"
+                        >
+                          <Edit className="h-3 w-3" />
+                          {language === "tl" ? "Magdagdag ng lahi" : "Add breeds"}
+                        </Link>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <p className="text-muted-foreground py-3">{t("common.none")}</p>
                 )}
               </CardContent>
             </Card>
           </div>
+
+          {/* Breed Composition Section */}
+          <Card className="card-warm">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-base font-medium text-gray-600 flex items-center gap-2">
+                <Dna className="h-4 w-4" />
+                {language === "tl" ? "Komposisyon ng Lahi" : "Breed Composition"}
+              </CardTitle>
+              {!editingBreeds && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingBreeds(true)}
+                  className="text-orange-600 hover:bg-orange-50"
+                >
+                  <Edit className="h-4 w-4 mr-1" />
+                  {t("action.edit")}
+                </Button>
+              )}
+              {editingBreeds && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCancelBreedEdit}
+                    className="text-gray-500"
+                    disabled={savingBreeds}
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    {t("action.cancel")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleSaveBreeds}
+                    className="bg-orange-500 hover:bg-orange-600 text-white"
+                    disabled={savingBreeds}
+                  >
+                    <Save className="h-4 w-4 mr-1" />
+                    {savingBreeds ? t("common.loading") : t("action.save")}
+                  </Button>
+                </div>
+              )}
+            </CardHeader>
+            <CardContent>
+              {editingBreeds ? (
+                <BreedCompositionEditor
+                  value={breedComposition}
+                  onChange={setBreedComposition}
+                  breeds={breeds}
+                  calculatedFromParents={
+                    bird.sire || bird.dam
+                      ? calculateChildBreedComposition(
+                          bird.sire?.breedComposition || null,
+                          bird.dam?.breedComposition || null
+                        )
+                      : null
+                  }
+                  isOverride={breedOverride}
+                  onOverrideChange={setBreedOverride}
+                />
+              ) : (
+                <>
+                  {bird.breedComposition && bird.breedComposition.length > 0 ? (
+                    <div className="space-y-2">
+                      {bird.breedComposition.map((entry, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between p-3 rounded-xl bg-orange-50"
+                        >
+                          <span className="font-medium text-gray-700">
+                            {getBreedName(entry.breedId)}
+                          </span>
+                          <span className="text-orange-600 font-semibold">
+                            {entry.percentage}%
+                          </span>
+                        </div>
+                      ))}
+                      {bird.breedOverride && (bird.sire || bird.dam) && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
+                          <AlertTriangle className="h-3 w-3" />
+                          {language === "tl"
+                            ? "Manu-manong na-override (hindi kinalkula mula sa mga magulang)"
+                            : "Manually overridden (not calculated from parents)"}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6">
+                      <Dna className="h-10 w-10 mx-auto text-gray-200 mb-2" />
+                      <p className="text-muted-foreground mb-3">
+                        {language === "tl"
+                          ? "Walang naka-set na komposisyon ng lahi"
+                          : "No breed composition set"}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditingBreeds(true)}
+                        className="border-orange-200 text-orange-600 hover:bg-orange-50"
+                      >
+                        <Edit className="h-4 w-4 mr-1" />
+                        {language === "tl" ? "Magdagdag ng Lahi" : "Add Breeds"}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Quick Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

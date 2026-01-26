@@ -18,6 +18,12 @@ import {
 import { useLanguage } from "@/hooks/use-language"
 import * as XLSX from "xlsx"
 
+interface BreedEntry {
+  name?: string
+  code?: string
+  percentage: number
+}
+
 interface ParsedRow {
   rowNumber: number
   name: string
@@ -30,6 +36,7 @@ interface ParsedRow {
   bandNumber: string
   breedName?: string
   breedCode?: string
+  breeds?: BreedEntry[]  // Multiple breeds with percentages
   color?: string
   notes?: string
   error?: string
@@ -91,6 +98,15 @@ export default function ImportBirdsPage() {
     const breedCodeIdx = headers.findIndex(
       (h) => h === "breed_code" || h === "breedcode"
     )
+    // Multi-breed columns: breed1, breed1_pct, breed2, breed2_pct, etc.
+    const breedColumns: { nameIdx: number; pctIdx: number }[] = []
+    for (let i = 1; i <= 4; i++) {
+      const nameIdx = headers.findIndex((h) => h === `breed${i}` || h === `breed${i}_name`)
+      const pctIdx = headers.findIndex((h) => h === `breed${i}_pct` || h === `breed${i}_percentage` || h === `breed${i}%`)
+      if (nameIdx !== -1) {
+        breedColumns.push({ nameIdx, pctIdx })
+      }
+    }
     const colorIdx = headers.findIndex((h) => h === "color" || h === "kulay")
     const notesIdx = headers.findIndex((h) => h === "notes" || h === "tala")
 
@@ -106,6 +122,17 @@ export default function ImportBirdsPage() {
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(",").map((v) => v.trim())
 
+      // Parse multiple breeds if columns exist
+      const breeds: BreedEntry[] = []
+      for (const bc of breedColumns) {
+        const breedName = values[bc.nameIdx]?.trim()
+        if (breedName) {
+          const pctStr = bc.pctIdx >= 0 ? values[bc.pctIdx]?.trim() : ""
+          const percentage = pctStr ? parseFloat(pctStr) : 0
+          breeds.push({ name: breedName, percentage: percentage || 0 })
+        }
+      }
+
       const row: ParsedRow = {
         rowNumber: i + 1,
         name: nameIdx >= 0 ? values[nameIdx] || "" : "",
@@ -118,6 +145,7 @@ export default function ImportBirdsPage() {
         bandNumber: bandIdx >= 0 ? values[bandIdx] || "" : "",
         breedName: breedNameIdx >= 0 ? values[breedNameIdx] || "" : "",
         breedCode: breedCodeIdx >= 0 ? values[breedCodeIdx]?.toUpperCase() || "" : "",
+        breeds: breeds.length > 0 ? breeds : undefined,
         color: colorIdx >= 0 ? values[colorIdx] || "" : "",
         notes: notesIdx >= 0 ? values[notesIdx] || "" : "",
       }
@@ -185,6 +213,15 @@ export default function ImportBirdsPage() {
     const bandKey = findHeader(["band", "band_number", "tatak"])
     const breedNameKey = findHeader(["breed", "breed_name", "lahi"])
     const breedCodeKey = findHeader(["breed_code", "breedcode"])
+    // Multi-breed columns: breed1, breed1_pct, breed2, breed2_pct, etc.
+    const breedColumnKeys: { nameKey?: string; pctKey?: string }[] = []
+    for (let i = 1; i <= 4; i++) {
+      const nameKey = findHeader([`breed${i}`, `breed${i}_name`])
+      const pctKey = findHeader([`breed${i}_pct`, `breed${i}_percentage`, `breed${i}%`])
+      if (nameKey) {
+        breedColumnKeys.push({ nameKey, pctKey })
+      }
+    }
     const colorKey = findHeader(["color", "kulay"])
     const notesKey = findHeader(["notes", "tala"])
 
@@ -215,6 +252,17 @@ export default function ImportBirdsPage() {
         }
       }
 
+      // Parse multiple breeds if columns exist
+      const breeds: BreedEntry[] = []
+      for (const bc of breedColumnKeys) {
+        const breedName = getValue(bc.nameKey)
+        if (breedName) {
+          const pctStr = getValue(bc.pctKey)
+          const percentage = pctStr ? parseFloat(pctStr) : 0
+          breeds.push({ name: breedName, percentage: percentage || 0 })
+        }
+      }
+
       const row: ParsedRow = {
         rowNumber: index + 2, // +2 because row 1 is header, and we're 0-indexed
         name: getValue(nameKey),
@@ -227,6 +275,7 @@ export default function ImportBirdsPage() {
         bandNumber: getValue(bandKey),
         breedName: getValue(breedNameKey),
         breedCode: getValue(breedCodeKey).toUpperCase(),
+        breeds: breeds.length > 0 ? breeds : undefined,
         color: getValue(colorKey),
         notes: getValue(notesKey),
       }
@@ -327,10 +376,11 @@ export default function ImportBirdsPage() {
   }
 
   const downloadTemplate = (format: "csv" | "xlsx") => {
-    const headers = ["name", "sex", "hatch_date", "status", "coop", "breed", "breed_code", "color", "sire", "dam", "band_number", "notes"]
+    const headers = ["name", "sex", "hatch_date", "status", "coop", "breed1", "breed1_pct", "breed2", "breed2_pct", "color", "sire", "dam", "band_number", "notes"]
     const sampleData = [
-      ["Rooster 1", "MALE", "2024-01-15", "ACTIVE", "Coop A", "Rhode Island Red", "RIR", "Red", "Father Bird", "Mother Bird", "BAND001", "Imported bird"],
-      ["Hen 1", "FEMALE", "2024-02-20", "ACTIVE", "Coop B", "Aseel", "ASEL", "Black", "", "", "BAND002", ""],
+      ["Rooster 1", "MALE", "2024-01-15", "ACTIVE", "Coop A", "Rhode Island Red", "100", "", "", "Red", "Father Bird", "Mother Bird", "BAND001", "Pure breed"],
+      ["Hen 1", "FEMALE", "2024-02-20", "ACTIVE", "Coop B", "Aseel", "50", "Kelso", "50", "Black", "", "", "BAND002", "Crossbreed"],
+      ["Chick 1", "UNKNOWN", "2024-06-01", "ACTIVE", "Brooder", "Rhode Island Red", "25", "Aseel", "75", "Brown", "Rooster 1", "Hen 1", "BAND003", "Offspring"],
     ]
 
     if (format === "csv") {
@@ -526,10 +576,13 @@ export default function ImportBirdsPage() {
                 <code className="bg-orange-100 px-1 rounded">coop</code> - Coop name (auto-created if not exists)
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">breed</code> - Breed name (auto-created if not exists)
+                <code className="bg-orange-100 px-1 rounded">breed1</code>, <code className="bg-orange-100 px-1 rounded">breed1_pct</code> - First breed name and percentage
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">breed_code</code> - Breed code (optional, auto-generated)
+                <code className="bg-orange-100 px-1 rounded">breed2</code>, <code className="bg-orange-100 px-1 rounded">breed2_pct</code> - Second breed name and percentage
+              </li>
+              <li>
+                <code className="bg-orange-100 px-1 rounded">breed3</code>, <code className="bg-orange-100 px-1 rounded">breed3_pct</code> - Third breed (up to 4 breeds supported)
               </li>
               <li>
                 <code className="bg-orange-100 px-1 rounded">color</code> - Bird color
@@ -678,7 +731,11 @@ export default function ImportBirdsPage() {
                       </td>
                       <td className="p-3">{row.hatchDate}</td>
                       <td className="p-3">{row.coopName || "-"}</td>
-                      <td className="p-3">{row.breedName || "-"}</td>
+                      <td className="p-3">
+                        {row.breeds && row.breeds.length > 0
+                          ? row.breeds.map((b, i) => `${b.name} ${b.percentage}%`).join(", ")
+                          : row.breedName || "-"}
+                      </td>
                       <td className="p-3">{row.color || "-"}</td>
                       <td className="p-3">{row.bandNumber || "-"}</td>
                       <td className="p-3">

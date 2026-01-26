@@ -243,6 +243,44 @@ export const translations = {
   "export.filterByOutcome": { en: "Filter by Outcome", tl: "Salain ayon sa Resulta" },
   "export.allStatuses": { en: "All Statuses", tl: "Lahat ng Kalagayan" },
   "export.allOutcomes": { en: "All Outcomes", tl: "Lahat ng Resulta" },
+
+  // Inventory Table
+  "inventory.select": { en: "Select", tl: "Piliin" },
+  "inventory.photo": { en: "Photo", tl: "Larawan" },
+  "inventory.idBand": { en: "ID/Band", tl: "ID/Band" },
+  "inventory.color": { en: "Color", tl: "Kulay" },
+  "inventory.fightRecord": { en: "W-L", tl: "P-T" },
+  "inventory.offspringCount": { en: "Offspring", tl: "Anak" },
+  "inventory.notes": { en: "Notes", tl: "Tala" },
+  "inventory.columns": { en: "Columns", tl: "Mga Kolum" },
+  "inventory.customizeColumns": { en: "Customize Columns", tl: "I-customize ang Kolum" },
+  "inventory.resetColumns": { en: "Reset to Default", tl: "Ibalik sa Default" },
+  "inventory.selectAll": { en: "Select All", tl: "Piliin Lahat" },
+  "inventory.selected": { en: "selected", tl: "napili" },
+  "inventory.clearSelection": { en: "Clear Selection", tl: "Burahin Seleksyon" },
+  "inventory.noPhoto": { en: "No photo", tl: "Walang larawan" },
+
+  // Bulk Actions
+  "bulk.moveToCoop": { en: "Move to Coop", tl: "Ilipat sa Kulungan" },
+  "bulk.changeStatus": { en: "Change Status", tl: "Baguhin Kalagayan" },
+  "bulk.delete": { en: "Delete", tl: "Tanggalin" },
+  "bulk.confirmDelete": { en: "Delete Birds?", tl: "Tanggalin ang mga Manok?" },
+  "bulk.confirmDeleteMsg": { en: "This will archive {count} bird(s). They can be restored later.", tl: "Ito ay mag-a-archive ng {count} manok. Maaari silang ibalik mamaya." },
+  "bulk.selectCoop": { en: "Select Coop", tl: "Pumili ng Kulungan" },
+  "bulk.selectStatus": { en: "Select Status", tl: "Pumili ng Kalagayan" },
+  "bulk.processing": { en: "Processing...", tl: "Pinoproseso..." },
+  "bulk.success": { en: "Successfully updated {count} bird(s)", tl: "Matagumpay na na-update ang {count} manok" },
+  "bulk.error": { en: "Failed to update birds", tl: "Hindi na-update ang mga manok" },
+
+  // Mobile View
+  "mobile.tapToExpand": { en: "Tap to expand", tl: "I-tap para palawakin" },
+  "mobile.longPressToSelect": { en: "Long press to select", tl: "Pindutin ng matagal para pumili" },
+  "mobile.viewDetails": { en: "View Details", tl: "Tingnan ang Detalye" },
+
+  // Sorting
+  "sort.asc": { en: "Sort ascending", tl: "Ayusin pataas" },
+  "sort.desc": { en: "Sort descending", tl: "Ayusin pababa" },
+  "sort.clear": { en: "Clear sort", tl: "Alisin ang pagkakasunod" },
 } as const
 
 export type TranslationKey = keyof typeof translations

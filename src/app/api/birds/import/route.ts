@@ -4,6 +4,12 @@ import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { BirdSex, BirdStatus } from "@prisma/client"
 
+interface BreedEntry {
+  name?: string
+  code?: string
+  percentage: number
+}
+
 interface ImportRow {
   rowNumber: number
   name: string
@@ -16,6 +22,7 @@ interface ImportRow {
   bandNumber: string
   breedName?: string
   breedCode?: string
+  breeds?: BreedEntry[]  // Multiple breeds with percentages
   color?: string
   notes?: string
 }
@@ -184,11 +191,23 @@ export async function POST(req: NextRequest) {
           coopId = await getOrCreateCoop(row.coopName)
         }
 
-        // Get or create breed
+        // Get or create breeds - support multiple breeds with percentages
         let breedComposition: { breedId: string; percentage: number }[] = []
-        const breedId = await getOrCreateBreed(row.breedCode, row.breedName)
-        if (breedId) {
-          breedComposition = [{ breedId, percentage: 100 }]
+
+        if (row.breeds && row.breeds.length > 0) {
+          // Multiple breeds with percentages
+          for (const breedEntry of row.breeds) {
+            const breedId = await getOrCreateBreed(breedEntry.code, breedEntry.name)
+            if (breedId) {
+              breedComposition.push({ breedId, percentage: breedEntry.percentage })
+            }
+          }
+        } else if (row.breedCode || row.breedName) {
+          // Single breed (legacy format) - 100%
+          const breedId = await getOrCreateBreed(row.breedCode, row.breedName)
+          if (breedId) {
+            breedComposition = [{ breedId, percentage: 100 }]
+          }
         }
 
         // Look up or create sire
