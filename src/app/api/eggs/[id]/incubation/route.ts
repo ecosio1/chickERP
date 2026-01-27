@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -22,6 +22,7 @@ export async function POST(
 ) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
     const { id: eggRecordId } = await params
 
     if (session.user.role !== "OWNER") {
@@ -32,16 +33,24 @@ export async function POST(
     const data = incubationSchema.parse(body)
 
     // Check if egg exists
-    const egg = await prisma.eggRecord.findUnique({
-      where: { id: eggRecordId },
-      include: { incubation: true },
-    })
+    const { data: egg, error: eggError } = await supabase
+      .from('egg_records')
+      .select('id')
+      .eq('id', eggRecordId)
+      .single()
 
-    if (!egg) {
+    if (eggError || !egg) {
       return errorResponse("Egg record not found", 404)
     }
 
-    if (egg.incubation) {
+    // Check if already in incubation
+    const { data: existingIncubation } = await supabase
+      .from('incubation_records')
+      .select('id')
+      .eq('egg_record_id', eggRecordId)
+      .single()
+
+    if (existingIncubation) {
       return errorResponse("This egg is already in incubation", 400)
     }
 
@@ -49,19 +58,27 @@ export async function POST(
     const expectedHatch = new Date(data.setDate)
     expectedHatch.setDate(expectedHatch.getDate() + 21)
 
-    const incubation = await prisma.incubationRecord.create({
-      data: {
-        eggRecordId,
-        setDate: data.setDate,
-        expectedHatch,
+    const { data: incubation, error: incubationError } = await supabase
+      .from('incubation_records')
+      .insert({
+        egg_record_id: eggRecordId,
+        set_date: data.setDate.toISOString(),
+        expected_hatch: expectedHatch.toISOString(),
         notes: data.notes,
-      },
-      include: {
-        eggRecord: {
-          include: { bird: { select: { id: true, name: true } } },
-        },
-      },
-    })
+      })
+      .select(`
+        *,
+        egg_record:egg_records(
+          *,
+          bird:birds(id, name)
+        )
+      `)
+      .single()
+
+    if (incubationError || !incubation) {
+      console.error("POST /api/eggs/[id]/incubation error:", incubationError)
+      return errorResponse("Failed to create incubation record", 500)
+    }
 
     return successResponse(incubation, 201)
   } catch (error) {
@@ -83,6 +100,7 @@ export async function PUT(
 ) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
     const { id: eggRecordId } = await params
 
     if (session.user.role !== "OWNER") {
@@ -92,29 +110,42 @@ export async function PUT(
     const body = await req.json()
     const data = updateIncubationSchema.parse(body)
 
-    const incubation = await prisma.incubationRecord.findUnique({
-      where: { eggRecordId },
-    })
+    // Find incubation record by egg_record_id
+    const { data: incubation, error: findError } = await supabase
+      .from('incubation_records')
+      .select('id')
+      .eq('egg_record_id', eggRecordId)
+      .single()
 
-    if (!incubation) {
+    if (findError || !incubation) {
       return errorResponse("Incubation record not found", 404)
     }
 
-    const updated = await prisma.incubationRecord.update({
-      where: { id: incubation.id },
-      data: {
-        actualHatch: data.actualHatch,
-        outcome: data.outcome,
-        chickId: data.chickId,
-        notes: data.notes,
-      },
-      include: {
-        eggRecord: {
-          include: { bird: { select: { id: true, name: true } } },
-        },
-        chick: { select: { id: true, name: true } },
-      },
-    })
+    // Build update object
+    const updateData: Record<string, unknown> = {}
+    if (data.actualHatch !== undefined) updateData.actual_hatch = data.actualHatch.toISOString()
+    if (data.outcome !== undefined) updateData.outcome = data.outcome
+    if (data.chickId !== undefined) updateData.chick_id = data.chickId
+    if (data.notes !== undefined) updateData.notes = data.notes
+
+    const { data: updated, error: updateError } = await supabase
+      .from('incubation_records')
+      .update(updateData)
+      .eq('id', incubation.id)
+      .select(`
+        *,
+        egg_record:egg_records(
+          *,
+          bird:birds(id, name)
+        ),
+        chick:birds(id, name)
+      `)
+      .single()
+
+    if (updateError || !updated) {
+      console.error("PUT /api/eggs/[id]/incubation error:", updateError)
+      return errorResponse("Failed to update incubation record", 500)
+    }
 
     return successResponse(updated)
   } catch (error) {

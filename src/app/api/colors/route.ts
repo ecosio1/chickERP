@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, successResponse, errorResponse } from "@/lib/api-utils"
 import { CHICKEN_COLORS } from "@/lib/chicken-colors"
 
@@ -7,6 +7,7 @@ import { CHICKEN_COLORS } from "@/lib/chicken-colors"
 export async function GET(req: NextRequest) {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
     const { searchParams } = new URL(req.url)
     const breedIds = searchParams.get("breeds")?.split(",").filter(Boolean) || []
@@ -18,23 +19,21 @@ export async function GET(req: NextRequest) {
 
     // Find which colors are commonly used with these breeds
     // by looking at existing birds that have these breeds in their composition
-    const birdsWithBreeds = await prisma.bird.findMany({
-      where: {
-        color: {
-          not: null,
-        },
-      },
-      select: {
-        color: true,
-        breedComposition: true,
-      },
-    })
+    const { data: birdsWithBreeds, error } = await supabase
+      .from('birds')
+      .select('color, breed_composition')
+      .not('color', 'is', null)
+
+    if (error) {
+      console.error("GET /api/colors error:", error)
+      return errorResponse("Failed to fetch bird colors", 500)
+    }
 
     // Count color usage for each breed
     const colorCounts: Record<string, number> = {}
 
-    for (const bird of birdsWithBreeds) {
-      const composition = bird.breedComposition as Array<{ breedId: string; percentage: number }> | null
+    for (const bird of birdsWithBreeds || []) {
+      const composition = bird.breed_composition as Array<{ breedId: string; percentage: number }> | null
       if (!composition || !bird.color) continue
 
       // Check if this bird has any of the specified breeds

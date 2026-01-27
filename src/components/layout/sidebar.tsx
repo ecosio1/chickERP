@@ -19,13 +19,13 @@ import {
   Dumbbell,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { signOut, useSession } from "next-auth/react"
+import { useAuth } from "@/components/providers/auth-provider"
 import { useState } from "react"
 import { useLanguage } from "@/hooks/use-language"
 
 export function Sidebar() {
   const pathname = usePathname()
-  const { data: session } = useSession()
+  const { profile, signOut } = useAuth()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const { t } = useLanguage()
 
@@ -163,18 +163,18 @@ export function Sidebar() {
             <div className="flex items-center gap-3 mb-4 px-2">
               <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 flex items-center justify-center">
                 <span className="text-sm font-bold text-orange-600">
-                  {session?.user?.name?.charAt(0).toUpperCase() || "U"}
+                  {profile?.name?.charAt(0).toUpperCase() || "U"}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{session?.user?.name}</p>
+                <p className="text-sm font-medium truncate">{profile?.name}</p>
                 <p className="text-xs text-muted-foreground capitalize">
-                  {session?.user?.role?.toLowerCase()}
+                  {profile?.role?.toLowerCase()}
                 </p>
               </div>
             </div>
             <button
-              onClick={() => signOut({ callbackUrl: "/login" })}
+              onClick={() => signOut()}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base text-gray-600 hover:bg-red-50 hover:text-red-600 transition-all"
             >
               <LogOut className="h-5 w-5" />

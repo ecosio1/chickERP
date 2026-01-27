@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -17,37 +17,35 @@ export async function GET(
 ) {
   try {
     await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
-    const coop = await prisma.coop.findUnique({
-      where: { id },
-      include: {
-        birds: {
-          where: { status: "ACTIVE" },
-          select: {
-            id: true,
-            name: true,
-            sex: true,
-            status: true,
-          },
-        },
-        _count: {
-          select: {
-            birds: {
-              where: { status: "ACTIVE" },
-            },
-          },
-        },
-      },
-    })
+    const { data: coop, error } = await supabase
+      .from('coops')
+      .select(`
+        *,
+        birds(id, name, sex, status)
+      `)
+      .eq('id', id)
+      .single()
 
-    if (!coop) {
+    if (error || !coop) {
       return errorResponse("Coop not found", 404)
     }
 
+    // Filter to active birds only
+    const activeBirds = coop.birds?.filter((b: { status: string }) => b.status === "ACTIVE") || []
+
     return successResponse({
       ...coop,
-      currentOccupancy: coop._count.birds,
+      birds: activeBirds.map((b: { id: string; name: string | null; sex: string; status: string }) => ({
+        id: b.id,
+        name: b.name,
+        sex: b.sex,
+        status: b.status,
+      })),
+      _count: { birds: activeBirds.length },
+      currentOccupancy: activeBirds.length,
     })
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
@@ -64,15 +62,31 @@ export async function PUT(
 ) {
   try {
     await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
     const body = await req.json()
     const data = updateCoopSchema.parse(body)
 
-    const coop = await prisma.coop.update({
-      where: { id },
-      data,
-    })
+    // Build update object with snake_case keys
+    const updateData: Record<string, unknown> = {}
+    if (data.name !== undefined) updateData.name = data.name
+    if (data.capacity !== undefined) updateData.capacity = data.capacity
+    if (data.coopType !== undefined) updateData.coop_type = data.coopType
+    if (data.status !== undefined) updateData.status = data.status
+    if (data.notes !== undefined) updateData.notes = data.notes
+
+    const { data: coop, error } = await supabase
+      .from('coops')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error || !coop) {
+      console.error("PUT /api/coops/[id] error:", error)
+      return errorResponse("Failed to update coop", 500)
+    }
 
     return successResponse(coop)
   } catch (error) {
@@ -86,19 +100,34 @@ export async function DELETE(
 ) {
   try {
     await requireAuth()
+    const supabase = await createClient()
     const { id } = await params
 
-    const activeBirds = await prisma.bird.count({
-      where: { coopId: id, status: "ACTIVE" },
-    })
+    // Check for active birds in coop
+    const { data: birds, error: birdsError } = await supabase
+      .from('birds')
+      .select('id')
+      .eq('coop_id', id)
+      .eq('status', 'ACTIVE')
 
-    if (activeBirds > 0) {
+    if (birdsError) {
+      console.error("DELETE /api/coops/[id] error:", birdsError)
+      return errorResponse("Failed to check coop birds", 500)
+    }
+
+    if (birds && birds.length > 0) {
       return errorResponse("Cannot delete coop with active birds", 400)
     }
 
-    await prisma.coop.delete({
-      where: { id },
-    })
+    const { error: deleteError } = await supabase
+      .from('coops')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error("DELETE /api/coops/[id] error:", deleteError)
+      return errorResponse("Failed to delete coop", 500)
+    }
 
     return successResponse({ success: true })
   } catch (error) {

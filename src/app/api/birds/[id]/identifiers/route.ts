@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -17,6 +17,7 @@ export async function POST(
   try {
     const session = await requireAuth()
     const { id: birdId } = await params
+    const supabase = await createClient()
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can add identifiers", 403)
@@ -26,34 +27,57 @@ export async function POST(
     const data = identifierSchema.parse(body)
 
     // Check if bird exists
-    const bird = await prisma.bird.findUnique({ where: { id: birdId } })
-    if (!bird) {
+    const { data: bird, error: birdError } = await supabase
+      .from('birds')
+      .select('id')
+      .eq('id', birdId)
+      .single()
+
+    if (birdError || !bird) {
       return errorResponse("Bird not found", 404)
     }
 
     // Check if this ID type already exists for this bird
-    const existing = await prisma.birdIdentifier.findUnique({
-      where: { birdId_idType: { birdId, idType: data.idType } },
-    })
+    const { data: existing } = await supabase
+      .from('bird_identifiers')
+      .select('id')
+      .eq('bird_id', birdId)
+      .eq('id_type', data.idType)
+      .single()
 
     if (existing) {
       // Update existing
-      const updated = await prisma.birdIdentifier.update({
-        where: { id: existing.id },
-        data: { idValue: data.idValue, notes: data.notes },
-      })
+      const { data: updated, error: updateError } = await supabase
+        .from('bird_identifiers')
+        .update({ id_value: data.idValue, notes: data.notes })
+        .eq('id', existing.id)
+        .select()
+        .single()
+
+      if (updateError) {
+        console.error("Update identifier error:", updateError)
+        return errorResponse("Failed to update identifier", 500)
+      }
+
       return successResponse(updated)
     }
 
     // Create new
-    const identifier = await prisma.birdIdentifier.create({
-      data: {
-        birdId,
-        idType: data.idType,
-        idValue: data.idValue,
+    const { data: identifier, error: createError } = await supabase
+      .from('bird_identifiers')
+      .insert({
+        bird_id: birdId,
+        id_type: data.idType,
+        id_value: data.idValue,
         notes: data.notes,
-      },
-    })
+      })
+      .select()
+      .single()
+
+    if (createError) {
+      console.error("Create identifier error:", createError)
+      return errorResponse("Failed to create identifier", 500)
+    }
 
     return successResponse(identifier, 201)
   } catch (error) {
@@ -76,6 +100,7 @@ export async function DELETE(
   try {
     const session = await requireAuth()
     const { id: birdId } = await params
+    const supabase = await createClient()
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can remove identifiers", 403)
@@ -88,9 +113,16 @@ export async function DELETE(
       return errorResponse("ID type is required", 400)
     }
 
-    await prisma.birdIdentifier.delete({
-      where: { birdId_idType: { birdId, idType } },
-    })
+    const { error } = await supabase
+      .from('bird_identifiers')
+      .delete()
+      .eq('bird_id', birdId)
+      .eq('id_type', idType)
+
+    if (error) {
+      console.error("Delete identifier error:", error)
+      return errorResponse("Failed to delete identifier", 500)
+    }
 
     return successResponse({ success: true })
   } catch (error) {

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -28,89 +28,129 @@ export async function GET(
   try {
     await requireAuth()
     const { id } = await params
+    const supabase = await createClient()
 
-    const bird = await prisma.bird.findUnique({
-      where: { id },
-      include: {
-        identifiers: true,
-        photos: { orderBy: { isPrimary: "desc" } },
-        notes: {
-          include: { createdBy: { select: { id: true, name: true } } },
-          orderBy: { createdAt: "desc" },
-          take: 20,
-        },
-        coop: true,
-        sire: {
-          select: {
-            id: true,
-            name: true,
-            identifiers: true,
-            breedComposition: true,
-            sire: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
-            dam: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
-          },
-        },
-        dam: {
-          select: {
-            id: true,
-            name: true,
-            identifiers: true,
-            breedComposition: true,
-            sire: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
-            dam: { select: { id: true, name: true, identifiers: true, breedComposition: true } },
-          },
-        },
-        offspringAsSire: {
-          include: { identifiers: true },
-          take: 50,
-        },
-        offspringAsDam: {
-          include: { identifiers: true },
-          take: 50,
-        },
-        eggRecords: {
-          orderBy: { date: "desc" },
-          take: 30,
-          include: { incubation: true },
-        },
-        weightRecords: {
-          orderBy: { date: "desc" },
-          take: 20,
-        },
-        vaccinations: {
-          include: { vaccination: true },
-        },
-        healthIncidents: {
-          include: { incident: true },
-        },
-        coopAssignments: {
-          include: { coop: true },
-          orderBy: { assignedAt: "desc" },
-          take: 10,
-        },
-        createdBy: { select: { id: true, name: true } },
-        hatchedFromEgg: {
-          include: {
-            eggRecord: {
-              include: { bird: { select: { id: true, name: true, identifiers: true } } },
-            },
-          },
-        },
-      },
-    })
+    // Get bird with basic relations
+    const { data: bird, error } = await supabase
+      .from('birds')
+      .select(`
+        *,
+        identifiers:bird_identifiers(*),
+        photos:bird_photos(*),
+        coop:coops(*)
+      `)
+      .eq('id', id)
+      .single()
 
-    if (!bird) {
+    if (error || !bird) {
+      console.error("Bird fetch error:", error)
       return errorResponse("Bird not found", 404)
     }
 
+    // Run ALL additional queries in parallel for speed
+    const [
+      sireResult,
+      damResult,
+      createdByResult,
+      notesResult,
+      offspringAsSireResult,
+      offspringAsDamResult,
+      eggRecordsResult,
+      weightRecordsResult,
+      vaccinationsResult,
+      healthIncidentsResult,
+      coopAssignmentsResult,
+    ] = await Promise.all([
+      // Sire
+      bird.sire_id
+        ? supabase.from('birds').select('id, name, breed_composition, identifiers:bird_identifiers(*)').eq('id', bird.sire_id).single()
+        : Promise.resolve({ data: null }),
+      // Dam
+      bird.dam_id
+        ? supabase.from('birds').select('id, name, breed_composition, identifiers:bird_identifiers(*)').eq('id', bird.dam_id).single()
+        : Promise.resolve({ data: null }),
+      // Created by
+      bird.created_by
+        ? supabase.from('profiles').select('id, name').eq('id', bird.created_by).single()
+        : Promise.resolve({ data: null }),
+      // Notes
+      supabase.from('bird_notes').select('*').eq('bird_id', id).order('created_at', { ascending: false }).limit(10),
+      // Offspring as sire
+      supabase.from('birds').select('id, name, sex, identifiers:bird_identifiers(*)').eq('sire_id', id).limit(50),
+      // Offspring as dam
+      supabase.from('birds').select('id, name, sex, identifiers:bird_identifiers(*)').eq('dam_id', id).limit(50),
+      // Egg records
+      supabase.from('egg_records').select('*').eq('bird_id', id).order('date', { ascending: false }).limit(20),
+      // Weight records
+      supabase.from('weight_records').select('*').eq('bird_id', id).order('date', { ascending: false }).limit(20),
+      // Vaccinations
+      supabase.from('vaccination_birds').select('*, vaccination:vaccinations(*)').eq('bird_id', id),
+      // Health incidents
+      supabase.from('health_incident_birds').select('*, incident:health_incidents(*)').eq('bird_id', id),
+      // Coop assignments
+      supabase.from('coop_assignments').select('*, coop:coops(*)').eq('bird_id', id).order('assigned_at', { ascending: false }).limit(10),
+    ])
+
+    // Transform parent data to camelCase
+    const sire = sireResult.data ? {
+      ...sireResult.data,
+      breedComposition: sireResult.data.breed_composition,
+    } : null
+    const dam = damResult.data ? {
+      ...damResult.data,
+      breedComposition: damResult.data.breed_composition,
+    } : null
+    const createdByUser = createdByResult.data
+    const notes = notesResult.data || []
+    const offspringAsSire = offspringAsSireResult.data || []
+    const offspringAsDam = offspringAsDamResult.data || []
+    const eggRecords = eggRecordsResult.data || []
+    const weightRecords = weightRecordsResult.data || []
+    const vaccinations = vaccinationsResult.data || []
+    const healthIncidents = healthIncidentsResult.data || []
+    const coopAssignments = coopAssignmentsResult.data || []
+
+    // Sort photos with primary first
+    const sortedPhotos = (bird.photos || []).sort((a: { is_primary: boolean }, b: { is_primary: boolean }) =>
+      (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)
+    )
+
     // Calculate stats
     const stats = {
-      totalEggs: bird.eggRecords.length,
-      totalOffspring: bird.offspringAsSire.length + bird.offspringAsDam.length,
-      ageInDays: Math.floor((Date.now() - new Date(bird.hatchDate).getTime()) / (1000 * 60 * 60 * 24)),
+      totalEggs: eggRecords?.length || 0,
+      totalOffspring: (offspringAsSire?.length || 0) + (offspringAsDam?.length || 0),
+      ageInDays: Math.floor((Date.now() - new Date(bird.hatch_date).getTime()) / (1000 * 60 * 60 * 24)),
     }
 
-    return successResponse({ ...bird, stats })
+    // Transform to camelCase for API response
+    const transformedBird = {
+      ...bird,
+      hatchDate: bird.hatch_date,
+      sireId: bird.sire_id,
+      damId: bird.dam_id,
+      coopId: bird.coop_id,
+      combType: bird.comb_type,
+      earlyLifeNotes: bird.early_life_notes,
+      breedComposition: bird.breed_composition,
+      breedOverride: bird.breed_override,
+      createdAt: bird.created_at,
+      updatedAt: bird.updated_at,
+      createdBy: createdByUser,
+      sire,
+      dam,
+      photos: sortedPhotos,
+      notes: notes || [],
+      offspringAsSire: offspringAsSire || [],
+      offspringAsDam: offspringAsDam || [],
+      eggRecords: eggRecords || [],
+      weightRecords: weightRecords || [],
+      vaccinations: vaccinations || [],
+      healthIncidents: healthIncidents || [],
+      coopAssignments: coopAssignments || [],
+      stats,
+    }
+
+    return successResponse(transformedBird)
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
       return errorResponse("Unauthorized", 401)
@@ -128,6 +168,7 @@ export async function PUT(
   try {
     const session = await requireAuth()
     const { id } = await params
+    const supabase = await createClient()
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can edit birds", 403)
@@ -138,65 +179,82 @@ export async function PUT(
 
     // Validate parent references if provided
     if (data.sireId) {
-      const sire = await prisma.bird.findUnique({ where: { id: data.sireId } })
+      const { data: sire } = await supabase
+        .from('birds')
+        .select('id, sex')
+        .eq('id', data.sireId)
+        .single()
       if (!sire) return errorResponse("Father bird not found", 400)
       if (sire.sex !== "MALE") return errorResponse("Father must be male", 400)
       if (sire.id === id) return errorResponse("Bird cannot be its own parent", 400)
     }
 
     if (data.damId) {
-      const dam = await prisma.bird.findUnique({ where: { id: data.damId } })
+      const { data: dam } = await supabase
+        .from('birds')
+        .select('id, sex')
+        .eq('id', data.damId)
+        .single()
       if (!dam) return errorResponse("Mother bird not found", 400)
       if (dam.sex !== "FEMALE") return errorResponse("Mother must be female", 400)
       if (dam.id === id) return errorResponse("Bird cannot be its own parent", 400)
     }
 
     // Check for coop change
-    const currentBird = await prisma.bird.findUnique({ where: { id } })
-    const coopChanged = data.coopId !== undefined && data.coopId !== currentBird?.coopId
+    const { data: currentBird } = await supabase
+      .from('birds')
+      .select('coop_id')
+      .eq('id', id)
+      .single()
+    const coopChanged = data.coopId !== undefined && data.coopId !== currentBird?.coop_id
 
-    const bird = await prisma.$transaction(async (tx) => {
-      const updated = await tx.bird.update({
-        where: { id },
-        data: {
-          name: data.name,
-          sex: data.sex,
-          status: data.status,
-          sireId: data.sireId,
-          damId: data.damId,
-          coopId: data.coopId,
-          color: data.color,
-          combType: data.combType,
-          earlyLifeNotes: data.earlyLifeNotes,
-          breedComposition: data.breedComposition,
-          breedOverride: data.breedOverride,
-        },
+    // Update bird
+    const { data: updated, error: updateError } = await supabase
+      .from('birds')
+      .update({
+        name: data.name,
+        sex: data.sex,
+        status: data.status,
+        sire_id: data.sireId,
+        dam_id: data.damId,
+        coop_id: data.coopId,
+        color: data.color,
+        comb_type: data.combType,
+        early_life_notes: data.earlyLifeNotes,
+        breed_composition: data.breedComposition,
+        breed_override: data.breedOverride,
       })
+      .eq('id', id)
+      .select()
+      .single()
 
-      // Update coop assignment if changed
-      if (coopChanged) {
-        // Close previous assignment
-        await tx.coopAssignment.updateMany({
-          where: { birdId: id, removedAt: null },
-          data: { removedAt: new Date() },
-        })
+    if (updateError) {
+      console.error("Update error:", updateError)
+      return errorResponse("Failed to update bird", 500)
+    }
 
-        // Create new assignment if assigned to a coop
-        if (data.coopId) {
-          await tx.coopAssignment.create({
-            data: {
-              birdId: id,
-              coopId: data.coopId,
-              assignedAt: new Date(),
-            },
+    // Update coop assignment if changed
+    if (coopChanged) {
+      // Close previous assignment
+      await supabase
+        .from('coop_assignments')
+        .update({ removed_at: new Date().toISOString() })
+        .eq('bird_id', id)
+        .is('removed_at', null)
+
+      // Create new assignment if assigned to a coop
+      if (data.coopId) {
+        await supabase
+          .from('coop_assignments')
+          .insert({
+            bird_id: id,
+            coop_id: data.coopId,
+            assigned_at: new Date().toISOString(),
           })
-        }
       }
+    }
 
-      return updated
-    })
-
-    return successResponse(bird)
+    return successResponse(updated)
   } catch (error) {
     return handleApiError(error, "PUT /api/birds/[id]")
   }
@@ -210,16 +268,22 @@ export async function DELETE(
   try {
     const session = await requireAuth()
     const { id } = await params
+    const supabase = await createClient()
 
     if (session.user.role !== "OWNER") {
       return errorResponse("Only owners can delete birds", 403)
     }
 
     // Soft delete - change status to archived
-    await prisma.bird.update({
-      where: { id },
-      data: { status: "ARCHIVED" },
-    })
+    const { error } = await supabase
+      .from('birds')
+      .update({ status: "ARCHIVED" })
+      .eq('id', id)
+
+    if (error) {
+      console.error("Delete error:", error)
+      return errorResponse("Failed to archive bird", 500)
+    }
 
     return successResponse({ success: true })
   } catch (error) {

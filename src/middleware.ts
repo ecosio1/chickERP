@@ -1,41 +1,63 @@
-import { withAuth } from "next-auth/middleware"
-import { NextResponse } from "next/server"
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse, type NextRequest } from 'next/server'
 
-export default withAuth(
-  function middleware(req) {
-    const token = req.nextauth.token
-    const isAuthPage = req.nextUrl.pathname.startsWith("/login") || req.nextUrl.pathname.startsWith("/register")
+export async function middleware(request: NextRequest) {
+  let supabaseResponse = NextResponse.next({
+    request,
+  })
 
-    if (isAuthPage && token) {
-      return NextResponse.redirect(new URL("/dashboard", req.url))
-    }
-
-    return NextResponse.next()
-  },
-  {
-    callbacks: {
-      authorized: ({ token, req }) => {
-        const isAuthPage = req.nextUrl.pathname.startsWith("/login") || req.nextUrl.pathname.startsWith("/register")
-        if (isAuthPage) {
-          return true
-        }
-        return !!token
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
       },
-    },
+    }
+  )
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  const isAuthPage = request.nextUrl.pathname.startsWith('/login') ||
+                     request.nextUrl.pathname.startsWith('/register')
+
+  // Redirect authenticated users away from auth pages
+  if (isAuthPage && user) {
+    return NextResponse.redirect(new URL('/dashboard', request.url))
   }
-)
+
+  // Redirect unauthenticated users to login
+  if (!isAuthPage && !user) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  return supabaseResponse
+}
 
 export const config = {
   matcher: [
-    "/dashboard/:path*",
-    "/flocks/:path*",
-    "/coops/:path*",
-    "/feed/:path*",
-    "/health/:path*",
-    "/reports/:path*",
-    "/settings/:path*",
-    "/users/:path*",
-    "/login",
-    "/register",
+    '/dashboard/:path*',
+    '/flocks/:path*',
+    '/coops/:path*',
+    '/feed/:path*',
+    '/health/:path*',
+    '/reports/:path*',
+    '/settings/:path*',
+    '/users/:path*',
+    '/login',
+    '/register',
   ],
 }

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
+import { requireAuth } from "@/lib/api-utils"
 
 // DELETE /api/settings/source-farms/[id] - Delete a source farm
 export async function DELETE(
@@ -9,26 +8,46 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
+    const session = await requireAuth()
     if (session.user.role !== "OWNER") {
       return NextResponse.json({ error: "Only owners can delete source farms" }, { status: 403 })
     }
 
     const { id } = await params
 
-    const farm = await prisma.sourceFarm.findUnique({ where: { id } })
+    const supabase = await createClient()
+
+    // Check if farm exists
+    const { data: farm, error: findError } = await supabase
+      .from('source_farms')
+      .select()
+      .eq('id', id)
+      .single()
+
+    if (findError && findError.code !== 'PGRST116') {
+      console.error("DELETE /api/settings/source-farms/[id] error:", findError)
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    }
+
     if (!farm) {
       return NextResponse.json({ error: "Source farm not found" }, { status: 404 })
     }
 
-    await prisma.sourceFarm.delete({ where: { id } })
+    const { error: deleteError } = await supabase
+      .from('source_farms')
+      .delete()
+      .eq('id', id)
+
+    if (deleteError) {
+      console.error("DELETE /api/settings/source-farms/[id] error:", deleteError)
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    }
 
     return NextResponse.json({ message: "Source farm deleted" })
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
     console.error("DELETE /api/settings/source-farms/[id] error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }

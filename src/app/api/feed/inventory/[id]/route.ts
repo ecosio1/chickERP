@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -18,13 +18,29 @@ export async function PUT(
     await requireAuth()
     const { id } = await params
 
+    const supabase = await createClient()
+
     const body = await req.json()
     const data = updateFeedSchema.parse(body)
 
-    const feed = await prisma.feedInventory.update({
-      where: { id },
-      data,
-    })
+    // Map camelCase to snake_case
+    const updateData: Record<string, unknown> = {}
+    if (data.brand !== undefined) updateData.brand = data.brand
+    if (data.quantityKg !== undefined) updateData.quantity_kg = data.quantityKg
+    if (data.unitCost !== undefined) updateData.cost_per_kg = data.unitCost
+    if (data.reorderLevel !== undefined) updateData.reorder_level = data.reorderLevel
+
+    const { data: feed, error } = await supabase
+      .from('feed_inventory')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error("PUT /api/feed/inventory/[id] error:", error)
+      return errorResponse("Internal server error", 500)
+    }
 
     return successResponse(feed)
   } catch (error) {
@@ -47,9 +63,17 @@ export async function DELETE(
     await requireAuth()
     const { id } = await params
 
-    await prisma.feedInventory.delete({
-      where: { id },
-    })
+    const supabase = await createClient()
+
+    const { error } = await supabase
+      .from('feed_inventory')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error("DELETE /api/feed/inventory/[id] error:", error)
+      return errorResponse("Internal server error", 500)
+    }
 
     return successResponse({ success: true })
   } catch (error) {

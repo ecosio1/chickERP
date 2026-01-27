@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -34,6 +34,8 @@ export async function POST(req: NextRequest) {
       return errorResponse("Only owners can import data", 403)
     }
 
+    const supabase = await createClient()
+
     const body = await req.json()
     const data = importSchema.parse(body)
 
@@ -61,25 +63,52 @@ export async function POST(req: NextRequest) {
     const pendingCoops = new Set<string>()
 
     // Build a map of existing birds by identifier for parent lookups
-    const existingBirds = await prisma.bird.findMany({
-      include: { identifiers: true },
-    })
+    const { data: existingBirds, error: birdsError } = await supabase
+      .from('birds')
+      .select(`
+        id,
+        sex,
+        bird_identifiers (id_type, id_value)
+      `)
+
+    if (birdsError) {
+      console.error("Failed to fetch existing birds:", birdsError)
+      return errorResponse("Failed to fetch existing birds", 500)
+    }
 
     const birdByIdentifier = new Map<string, string>()
-    existingBirds.forEach((bird) => {
-      bird.identifiers.forEach((id) => {
-        birdByIdentifier.set(`${id.idType}:${id.idValue}`, bird.id)
+    const birdById = new Map<string, { id: string; sex: string }>()
+    ;(existingBirds || []).forEach((bird) => {
+      birdById.set(bird.id, { id: bird.id, sex: bird.sex })
+      ;(bird.bird_identifiers || []).forEach((id: { id_type: string; id_value: string }) => {
+        birdByIdentifier.set(`${id.id_type}:${id.id_value}`, bird.id)
       })
     })
 
     // Get breeds for composition
-    const breeds = await prisma.breed.findMany()
-    const breedByCode = new Map(breeds.map((b) => [b.code, b.id]))
-    const breedByName = new Map(breeds.map((b) => [b.name.toLowerCase(), b.id]))
+    const { data: breeds, error: breedsError } = await supabase
+      .from('breeds')
+      .select('id, code, name')
+
+    if (breedsError) {
+      console.error("Failed to fetch breeds:", breedsError)
+      return errorResponse("Failed to fetch breeds", 500)
+    }
+
+    const breedByCode = new Map((breeds || []).map((b) => [b.code, b.id]))
+    const breedByName = new Map((breeds || []).map((b) => [b.name.toLowerCase(), b.id]))
 
     // Get coops
-    const coops = await prisma.coop.findMany()
-    const coopByName = new Map(coops.map((c) => [c.name.toLowerCase(), c.id]))
+    const { data: coops, error: coopsError } = await supabase
+      .from('coops')
+      .select('id, name')
+
+    if (coopsError) {
+      console.error("Failed to fetch coops:", coopsError)
+      return errorResponse("Failed to fetch coops", 500)
+    }
+
+    const coopByName = new Map((coops || []).map((c) => [c.name.toLowerCase(), c.id]))
 
     // Helper to generate breed code from name
     const generateBreedCode = (name: string): string => {
@@ -128,13 +157,20 @@ export async function POST(req: NextRequest) {
           return "pending"
         }
 
-        const newBreed = await prisma.breed.create({
-          data: {
+        const { data: newBreed, error: createError } = await supabase
+          .from('breeds')
+          .insert({
             name: name,
             code: finalCode,
             varieties: [],
-          },
-        })
+          })
+          .select('id')
+          .single()
+
+        if (createError || !newBreed) {
+          console.error("Failed to create breed:", createError)
+          return null
+        }
 
         breedByCode.set(finalCode, newBreed.id)
         breedByName.set(name.toLowerCase(), newBreed.id)
@@ -165,14 +201,21 @@ export async function POST(req: NextRequest) {
           return "pending"
         }
 
-        const newCoop = await prisma.coop.create({
-          data: {
+        const { data: newCoop, error: createError } = await supabase
+          .from('coops')
+          .insert({
             name: name,
             capacity: 20, // Default capacity
-            coopType: "GROW_OUT", // Default type
+            coop_type: "GROW_OUT", // Default type
             status: "ACTIVE",
-          },
-        })
+          })
+          .select('id')
+          .single()
+
+        if (createError || !newCoop) {
+          console.error("Failed to create coop:", createError)
+          return null
+        }
 
         coopByName.set(name.toLowerCase(), newCoop.id)
         results.autoCreated.coops.push({ name: name })
@@ -203,8 +246,25 @@ export async function POST(req: NextRequest) {
 
         if (bird.sireId) {
           // Try to find by ID or identifier
-          const sire = existingBirds.find((b) => b.id === bird.sireId) ||
-            existingBirds.find((b) => b.identifiers.some((id) => id.idValue === bird.sireId))
+          const sireById = birdById.get(bird.sireId)
+          let sire: { id: string; sex: string } | undefined
+
+          if (sireById) {
+            sire = sireById
+          } else {
+            // Search by identifier value
+            const entries = Array.from(birdByIdentifier.entries())
+            for (const [key, id] of entries) {
+              if (key.includes(bird.sireId)) {
+                const foundBird = birdById.get(id)
+                if (foundBird) {
+                  sire = foundBird
+                  break
+                }
+              }
+            }
+          }
+
           if (!sire) {
             results.errors.push({ row: rowNum, message: `Father not found: ${bird.sireId}` })
             results.invalid++
@@ -219,8 +279,25 @@ export async function POST(req: NextRequest) {
         }
 
         if (bird.damId) {
-          const dam = existingBirds.find((b) => b.id === bird.damId) ||
-            existingBirds.find((b) => b.identifiers.some((id) => id.idValue === bird.damId))
+          const damById = birdById.get(bird.damId)
+          let dam: { id: string; sex: string } | undefined
+
+          if (damById) {
+            dam = damById
+          } else {
+            // Search by identifier value
+            const entries = Array.from(birdByIdentifier.entries())
+            for (const [key, id] of entries) {
+              if (key.includes(bird.damId)) {
+                const foundBird = birdById.get(id)
+                if (foundBird) {
+                  dam = foundBird
+                  break
+                }
+              }
+            }
+          }
+
           if (!dam) {
             results.errors.push({ row: rowNum, message: `Mother not found: ${bird.damId}` })
             results.invalid++
@@ -267,30 +344,50 @@ export async function POST(req: NextRequest) {
         // Get or create coop
         const coopId = await getOrCreateCoop(bird.coopName)
 
-        const newBird = await prisma.bird.create({
-          data: {
+        const { data: newBird, error: createBirdError } = await supabase
+          .from('birds')
+          .insert({
             name: bird.name,
             sex: bird.sex,
-            hatchDate,
-            sireId,
-            damId,
-            coopId,
+            hatch_date: hatchDate.toISOString().split('T')[0],
+            sire_id: sireId,
+            dam_id: damId,
+            coop_id: coopId,
             color: bird.color,
-            breedComposition,
-            createdById: session.user.id,
-            identifiers: {
-              create: [
-                ...(bird.legBandNumber ? [{ idType: "LEG_NUMBER", idValue: bird.legBandNumber }] : []),
-                ...(bird.legBandColor ? [{ idType: "LEG_COLOR", idValue: bird.legBandColor }] : []),
-                ...(bird.wingBand ? [{ idType: "WING_BAND", idValue: bird.wingBand }] : []),
-              ],
-            },
-          },
-        })
+            breed_composition: breedComposition,
+            created_by: session.user.id,
+          })
+          .select('id')
+          .single()
+
+        if (createBirdError || !newBird) {
+          results.errors.push({ row: rowNum, message: `Error creating bird: ${createBirdError?.message || "Unknown"}` })
+          results.invalid++
+          continue
+        }
+
+        // Create identifiers
+        const identifiersToCreate = [
+          ...(bird.legBandNumber ? [{ bird_id: newBird.id, id_type: "LEG_NUMBER", id_value: bird.legBandNumber }] : []),
+          ...(bird.legBandColor ? [{ bird_id: newBird.id, id_type: "LEG_COLOR", id_value: bird.legBandColor }] : []),
+          ...(bird.wingBand ? [{ bird_id: newBird.id, id_type: "WING_BAND", id_value: bird.wingBand }] : []),
+        ]
+
+        if (identifiersToCreate.length > 0) {
+          const { error: identifierError } = await supabase
+            .from('bird_identifiers')
+            .insert(identifiersToCreate)
+
+          if (identifierError) {
+            console.error("Failed to create identifiers:", identifierError)
+            // Bird was created, so we still count it as success but log the error
+          }
+        }
 
         results.created.push(newBird.id)
 
         // Add to lookup map for subsequent rows
+        birdById.set(newBird.id, { id: newBird.id, sex: bird.sex })
         if (bird.legBandNumber) {
           birdByIdentifier.set(`LEG_NUMBER:${bird.legBandNumber}`, newBird.id)
         }

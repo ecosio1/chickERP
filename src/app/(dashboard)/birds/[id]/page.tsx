@@ -1,14 +1,22 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Bird,
   ArrowLeft,
-  Edit,
   Scale,
   Egg,
   Syringe,
@@ -21,19 +29,15 @@ import {
   Swords,
   Trophy,
   ChevronRight,
-  Palette,
   Crown,
   AlertTriangle,
-  Dna,
-  ExternalLink,
   Save,
+  Loader2,
   X,
 } from "lucide-react"
 import { PhotoGallery } from "@/components/birds/PhotoGallery"
 import { RFIDLinkButton } from "@/components/birds/RFIDLinkButton"
-import { BreedCompositionEditor } from "@/components/birds/BreedCompositionEditor"
 import { useLanguage } from "@/hooks/use-language"
-import { calculateChildBreedComposition } from "@/lib/breed-utils"
 import { getColorById } from "@/lib/chicken-colors"
 import { cn } from "@/lib/utils"
 import {
@@ -47,11 +51,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-
-interface BreedCompositionEntry {
-  breedId: string
-  percentage: number
-}
 
 interface BirdDetail {
   id: string
@@ -67,20 +66,10 @@ interface BirdDetail {
   color: string | null
   combType: string | null
   earlyLifeNotes: string | null
-  breedComposition: BreedCompositionEntry[] | null
+  breedComposition: Array<{ breedId: string; percentage: number }> | null
   breedOverride: boolean
-  sire: {
-    id: string
-    name: string | null
-    identifiers: Array<{ idType: string; idValue: string }>
-    breedComposition: BreedCompositionEntry[] | null
-  } | null
-  dam: {
-    id: string
-    name: string | null
-    identifiers: Array<{ idType: string; idValue: string }>
-    breedComposition: BreedCompositionEntry[] | null
-  } | null
+  sire: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }>; breedComposition?: Array<{ breedId: string; percentage: number }> | null } | null
+  dam: { id: string; name: string | null; identifiers: Array<{ idType: string; idValue: string }>; breedComposition?: Array<{ breedId: string; percentage: number }> | null } | null
   coop: { id: string; name: string } | null
   identifiers: Array<{ id: string; idType: string; idValue: string }>
   photos: Array<{ id: string; url: string; isPrimary: boolean; caption?: string | null }>
@@ -91,12 +80,6 @@ interface BirdDetail {
   healthIncidents: Array<{ id: string; symptoms: string; outcome: string }>
   offspringAsSire: Array<{ id: string; name: string | null; sex: string; identifiers: Array<{ idType: string; idValue: string }> }>
   offspringAsDam: Array<{ id: string; name: string | null; sex: string; identifiers: Array<{ idType: string; idValue: string }> }>
-}
-
-interface Breed {
-  id: string
-  name: string
-  code: string
 }
 
 const COMB_TYPE_LABELS: Record<string, { en: string; tl: string }> = {
@@ -128,6 +111,32 @@ interface ExerciseRecord {
 
 type TabType = "overview" | "conditioning" | "fights" | "offspring"
 
+interface Coop {
+  id: string
+  name: string
+}
+
+interface Breed {
+  id: string
+  name: string
+  code: string
+}
+
+const STATUS_OPTIONS = [
+  { value: "ACTIVE", label: "Active", labelTl: "Aktibo" },
+  { value: "BREEDING", label: "Breeding", labelTl: "Nagpapaanak" },
+  { value: "SOLD", label: "Sold", labelTl: "Naibenta" },
+  { value: "DECEASED", label: "Deceased", labelTl: "Patay" },
+  { value: "CULLED", label: "Culled", labelTl: "Kinatay" },
+  { value: "RETIRED", label: "Retired", labelTl: "Retirado" },
+]
+
+const SEX_OPTIONS = [
+  { value: "MALE", label: "Male", labelTl: "Lalaki" },
+  { value: "FEMALE", label: "Female", labelTl: "Babae" },
+  { value: "UNKNOWN", label: "Unknown", labelTl: "Hindi Alam" },
+]
+
 export default function BirdDetailPage() {
   const { t, formatAge, language } = useLanguage()
   const params = useParams()
@@ -135,47 +144,106 @@ export default function BirdDetailPage() {
   const [bird, setBird] = useState<BirdDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState<TabType>("overview")
   const [fights, setFights] = useState<FightRecord[]>([])
   const [exercises, setExercises] = useState<ExerciseRecord[]>([])
   const [loadingFights, setLoadingFights] = useState(false)
   const [loadingExercises, setLoadingExercises] = useState(false)
+  const [coops, setCoops] = useState<Coop[]>([])
   const [breeds, setBreeds] = useState<Breed[]>([])
-  const [editingBreeds, setEditingBreeds] = useState(false)
-  const [breedComposition, setBreedComposition] = useState<BreedCompositionEntry[]>([])
-  const [breedOverride, setBreedOverride] = useState(false)
-  const [savingBreeds, setSavingBreeds] = useState(false)
+
+  // Editable fields
+  const [editName, setEditName] = useState("")
+  const [editStatus, setEditStatus] = useState("")
+  const [editSex, setEditSex] = useState("")
+  const [editCoopId, setEditCoopId] = useState<string | null>(null)
+  const [editColor, setEditColor] = useState("")
+  const [editBreedComposition, setEditBreedComposition] = useState<Array<{ breedId: string; percentage: number }>>([])
+  const [sireBreed, setSireBreed] = useState<Array<{ breedId: string; percentage: number }>>([])
+  const [damBreed, setDamBreed] = useState<Array<{ breedId: string; percentage: number }>>([])
+  const [breedSelectKey, setBreedSelectKey] = useState(0)
+  const [sireSelectKey, setSireSelectKey] = useState(0)
+  const [damSelectKey, setDamSelectKey] = useState(0)
+  const [originalValues, setOriginalValues] = useState<{
+    name: string
+    status: string
+    sex: string
+    coopId: string | null
+    color: string
+    breedComposition: Array<{ breedId: string; percentage: number }>
+  } | null>(null)
+
+  // Check if there are unsaved changes
+  const hasChanges = useMemo(() => {
+    if (!originalValues) return false
+    const breedChanged = JSON.stringify(editBreedComposition) !== JSON.stringify(originalValues.breedComposition)
+    return (
+      editName !== originalValues.name ||
+      editStatus !== originalValues.status ||
+      editSex !== originalValues.sex ||
+      editCoopId !== originalValues.coopId ||
+      editColor !== originalValues.color ||
+      breedChanged
+    )
+  }, [editName, editStatus, editSex, editCoopId, editColor, editBreedComposition, originalValues])
 
   useEffect(() => {
-    async function fetchBird() {
+    async function fetchData() {
       try {
-        const res = await fetch(`/api/birds/${params.id}`)
-        if (res.ok) {
-          const json = await res.json()
+        const [birdRes, coopsRes, breedsRes] = await Promise.all([
+          fetch(`/api/birds/${params.id}`),
+          fetch("/api/coops"),
+          fetch("/api/breeds"),
+        ])
+
+        if (birdRes.ok) {
+          const json = await birdRes.json()
           setBird(json)
-          // Initialize breed composition state
-          setBreedComposition(json.breedComposition || [])
-          setBreedOverride(json.breedOverride || false)
+          // Initialize editable fields
+          setEditName(json.name || "")
+          setEditStatus(json.status || "ACTIVE")
+          setEditSex(json.sex || "UNKNOWN")
+          setEditCoopId(json.coopId || null)
+          setEditColor(json.color || "")
+          setEditBreedComposition(json.breedComposition || [])
+          // Load parent breed compositions if available
+          if (json.sire?.breedComposition?.length > 0) {
+            setSireBreed(json.sire.breedComposition)
+          }
+          if (json.dam?.breedComposition?.length > 0) {
+            setDamBreed(json.dam.breedComposition)
+          }
+          setOriginalValues({
+            name: json.name || "",
+            status: json.status || "ACTIVE",
+            sex: json.sex || "UNKNOWN",
+            coopId: json.coopId || null,
+            color: json.color || "",
+            breedComposition: json.breedComposition || [],
+          })
         } else {
           router.push("/birds")
         }
+
+        if (coopsRes.ok) {
+          const coopsData = await coopsRes.json()
+          setCoops(coopsData.coops || [])
+        }
+
+        if (breedsRes.ok) {
+          const breedsData = await breedsRes.json()
+          setBreeds(breedsData || [])
+        }
       } catch (error) {
-        console.error("Failed to fetch bird:", error)
+        console.error("Failed to fetch data:", error)
         router.push("/birds")
       } finally {
         setLoading(false)
       }
     }
-    if (params.id) fetchBird()
+    if (params.id) fetchData()
   }, [params.id, router])
-
-  // Fetch breeds for the editor
-  useEffect(() => {
-    fetch("/api/breeds")
-      .then((r) => r.json())
-      .then((data) => setBreeds(data || []))
-      .catch(console.error)
-  }, [])
 
   useEffect(() => {
     if (activeTab === "fights" && bird && fights.length === 0 && !loadingFights) {
@@ -208,48 +276,39 @@ export default function BirdDetailPage() {
     }
   }
 
-  const handleSaveBreeds = async () => {
-    if (!bird) return
-    setSavingBreeds(true)
+  const handleSave = async () => {
+    if (!bird || !hasChanges) return
+    setSaving(true)
     try {
       const res = await fetch(`/api/birds/${bird.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          breedComposition,
-          breedOverride,
+          name: editName || null,
+          status: editStatus,
+          sex: editSex,
+          coopId: editCoopId,
+          color: editColor || null,
+          breedComposition: editBreedComposition,
         }),
       })
       if (res.ok) {
         const updated = await res.json()
-        setBird({ ...bird, breedComposition, breedOverride })
-        setEditingBreeds(false)
+        setBird({ ...bird, ...updated, name: editName, status: editStatus, sex: editSex, coopId: editCoopId, color: editColor, breedComposition: editBreedComposition })
+        setOriginalValues({
+          name: editName,
+          status: editStatus,
+          sex: editSex,
+          coopId: editCoopId,
+          color: editColor,
+          breedComposition: editBreedComposition,
+        })
       }
     } catch (error) {
-      console.error("Failed to save breed composition:", error)
+      console.error("Failed to save:", error)
     } finally {
-      setSavingBreeds(false)
+      setSaving(false)
     }
-  }
-
-  const handleCancelBreedEdit = () => {
-    setBreedComposition(bird?.breedComposition || [])
-    setBreedOverride(bird?.breedOverride || false)
-    setEditingBreeds(false)
-  }
-
-  // Get breed name from ID
-  const getBreedName = (breedId: string) => {
-    const breed = breeds.find((b) => b.id === breedId)
-    return breed ? breed.name : breedId
-  }
-
-  // Format breed composition for display
-  const formatBreedComposition = (composition: BreedCompositionEntry[] | null) => {
-    if (!composition || composition.length === 0) return null
-    return composition
-      .map((b) => `${getBreedName(b.breedId)}: ${b.percentage}%`)
-      .join(", ")
   }
 
   if (loading) {
@@ -292,6 +351,134 @@ export default function BirdDetailPage() {
     }
   }
 
+  // Format breed composition for display (uses editBreedComposition for live editing)
+  const getBreedDisplay = () => {
+    if (!editBreedComposition || editBreedComposition.length === 0) return null
+
+    // Create breed lookup map
+    const breedMap = new Map(breeds.map((b) => [b.id, b]))
+
+    // Sort by percentage descending
+    const sorted = [...editBreedComposition].sort((a, b) => b.percentage - a.percentage)
+
+    return sorted.map((bc) => {
+      const breed = breedMap.get(bc.breedId)
+      return {
+        name: breed?.name || breed?.code || bc.breedId.slice(0, 8),
+        code: breed?.code || "",
+        percentage: bc.percentage,
+        breedId: bc.breedId,
+      }
+    })
+  }
+  const breedDisplay = getBreedDisplay()
+
+  // Add a breed to composition
+  const addBreed = (breedId: string) => {
+    if (editBreedComposition.some((bc) => bc.breedId === breedId)) return
+    // Default first breed to 100%, otherwise redistribute evenly
+    const newComp = [...editBreedComposition, { breedId, percentage: editBreedComposition.length === 0 ? 100 : 0 }]
+    if (newComp.length > 1) {
+      const evenPct = Math.floor(100 / newComp.length)
+      const remainder = 100 - (evenPct * newComp.length)
+      setEditBreedComposition(newComp.map((bc, i) => ({ ...bc, percentage: evenPct + (i === 0 ? remainder : 0) })))
+    } else {
+      setEditBreedComposition(newComp)
+    }
+    // Reset the select dropdown
+    setBreedSelectKey((k) => k + 1)
+  }
+
+  // Remove a breed from composition
+  const removeBreed = (breedId: string) => {
+    const newComp = editBreedComposition.filter((bc) => bc.breedId !== breedId)
+    if (newComp.length === 0) {
+      setEditBreedComposition([])
+      return
+    }
+    // Redistribute percentages
+    const evenPct = Math.floor(100 / newComp.length)
+    const remainder = 100 - (evenPct * newComp.length)
+    setEditBreedComposition(newComp.map((bc, i) => ({ ...bc, percentage: evenPct + (i === 0 ? remainder : 0) })))
+  }
+
+  // Update breed percentage
+  const updateBreedPercentage = (breedId: string, percentage: number) => {
+    setEditBreedComposition(editBreedComposition.map((bc) =>
+      bc.breedId === breedId ? { ...bc, percentage: Math.max(0, Math.min(100, percentage)) } : bc
+    ))
+  }
+
+  // Parent breed input functions (for calculating child's breed)
+  const addParentBreed = (parent: "sire" | "dam", breedId: string) => {
+    const setFn = parent === "sire" ? setSireBreed : setDamBreed
+    const current = parent === "sire" ? sireBreed : damBreed
+    if (current.some((bc) => bc.breedId === breedId)) return
+    const newComp = [...current, { breedId, percentage: current.length === 0 ? 100 : 0 }]
+    if (newComp.length > 1) {
+      const evenPct = Math.floor(100 / newComp.length)
+      const remainder = 100 - (evenPct * newComp.length)
+      setFn(newComp.map((bc, i) => ({ ...bc, percentage: evenPct + (i === 0 ? remainder : 0) })))
+    } else {
+      setFn(newComp)
+    }
+    if (parent === "sire") setSireSelectKey((k) => k + 1)
+    else setDamSelectKey((k) => k + 1)
+  }
+
+  const removeParentBreed = (parent: "sire" | "dam", breedId: string) => {
+    const setFn = parent === "sire" ? setSireBreed : setDamBreed
+    const current = parent === "sire" ? sireBreed : damBreed
+    const newComp = current.filter((bc) => bc.breedId !== breedId)
+    if (newComp.length === 0) {
+      setFn([])
+      return
+    }
+    const evenPct = Math.floor(100 / newComp.length)
+    const remainder = 100 - (evenPct * newComp.length)
+    setFn(newComp.map((bc, i) => ({ ...bc, percentage: evenPct + (i === 0 ? remainder : 0) })))
+  }
+
+  const updateParentBreedPercentage = (parent: "sire" | "dam", breedId: string, percentage: number) => {
+    const setFn = parent === "sire" ? setSireBreed : setDamBreed
+    const current = parent === "sire" ? sireBreed : damBreed
+    setFn(current.map((bc) =>
+      bc.breedId === breedId ? { ...bc, percentage: Math.max(0, Math.min(100, percentage)) } : bc
+    ))
+  }
+
+  // Calculate breed from parent inputs (50% from each) - regular function since it's after early returns
+  const getCalculatedBreed = () => {
+    if (sireBreed.length === 0 && damBreed.length === 0) return []
+    const breedMap = new Map<string, number>()
+    sireBreed.forEach((bc) => {
+      const current = breedMap.get(bc.breedId) || 0
+      breedMap.set(bc.breedId, current + (bc.percentage / 2))
+    })
+    damBreed.forEach((bc) => {
+      const current = breedMap.get(bc.breedId) || 0
+      breedMap.set(bc.breedId, current + (bc.percentage / 2))
+    })
+    return Array.from(breedMap.entries())
+      .map(([breedId, percentage]) => ({ breedId, percentage: Math.round(percentage) }))
+      .filter((bc) => bc.percentage > 0)
+      .sort((a, b) => b.percentage - a.percentage)
+  }
+  const calculatedBreed = getCalculatedBreed()
+
+  // Helper to format any bird's breed composition for display
+  const formatBreedComposition = (composition: Array<{ breedId: string; percentage: number }> | null | undefined) => {
+    if (!composition || composition.length === 0) return null
+    const breedMap = new Map(breeds.map((b) => [b.id, b]))
+    const sorted = [...composition].sort((a, b) => b.percentage - a.percentage)
+    return sorted.map((bc) => {
+      const breed = breedMap.get(bc.breedId)
+      const name = breed?.code || breed?.name || bc.breedId.slice(0, 6)
+      if (bc.percentage === 100) return name
+      return `${name} ${bc.percentage}%`
+    }).join(" / ")
+  }
+
   const offspring = [...(bird.offspringAsSire || []), ...(bird.offspringAsDam || [])]
   const maleOffspring = offspring.filter((o) => o.sex === "MALE").length
   const femaleOffspring = offspring.filter((o) => o.sex === "FEMALE").length
@@ -324,7 +511,7 @@ export default function BirdDetailPage() {
               {bird.identifiers[0]?.idValue || bird.name || `Bird #${bird.id.slice(-6)}`}
             </h1>
             <p className="text-muted-foreground">
-              {bird.sex === "MALE" ? t("bird.sex.male") : bird.sex === "FEMALE" ? t("bird.sex.female") : t("bird.sex.unknown")}
+              {editSex === "MALE" ? t("bird.sex.male") : editSex === "FEMALE" ? t("bird.sex.female") : t("bird.sex.unknown")}
               {" - "}
               {formatAge(ageInDays)}
             </p>
@@ -336,7 +523,6 @@ export default function BirdDetailPage() {
             currentRfid={bird.identifiers?.find((id) => id.idType === "RFID")?.idValue || null}
             onRfidChange={(newRfid) => {
               if (newRfid) {
-                // Add or update RFID identifier
                 const existingIndex = bird.identifiers?.findIndex((id) => id.idType === "RFID") ?? -1
                 if (existingIndex >= 0) {
                   const newIdentifiers = [...(bird.identifiers || [])]
@@ -349,7 +535,6 @@ export default function BirdDetailPage() {
                   })
                 }
               } else {
-                // Remove RFID identifier
                 setBird({
                   ...bird,
                   identifiers: bird.identifiers?.filter((id) => id.idType !== "RFID") || [],
@@ -357,12 +542,6 @@ export default function BirdDetailPage() {
               }
             }}
           />
-          <Link href={`/birds/${bird.id}/edit`}>
-            <Button variant="outline" className="rounded-xl border-2 border-orange-100">
-              <Edit className="h-4 w-4 mr-2" />
-              {t("action.edit")}
-            </Button>
-          </Link>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" className="rounded-xl border-2 border-red-100 text-red-600 hover:bg-red-50">
@@ -391,49 +570,171 @@ export default function BirdDetailPage() {
         </div>
       </div>
 
-      {/* Main Info Card */}
+      {/* Floating Save Button */}
+      {hasChanges && (
+        <div className="fixed bottom-24 lg:bottom-8 right-4 lg:right-8 z-50">
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-green-500 hover:bg-green-600 text-white rounded-xl shadow-lg px-6 h-12"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                {t("common.loading")}
+              </>
+            ) : (
+              <>
+                <Save className="h-5 w-5 mr-2" />
+                {t("action.save")}
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Main Info Card - Inline Editable */}
       <Card className="card-warm">
         <CardContent className="p-6">
-          <div className="flex items-start gap-6">
+          <div className="flex flex-col lg:flex-row items-start gap-6">
             <PhotoGallery
               birdId={bird.id}
               photos={bird.photos}
-              sexColor={getSexColor(bird.sex)}
+              sexColor={getSexColor(editSex)}
               onPhotosChange={(newPhotos) => setBird({ ...bird, photos: newPhotos })}
             />
-            <div className="flex-1 space-y-4">
-              {/* Status */}
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "px-3 py-1 rounded-full text-sm font-medium",
-                    bird.status === "ACTIVE"
-                      ? "bg-green-100 text-green-700"
-                      : bird.status === "SOLD"
-                      ? "bg-yellow-100 text-yellow-700"
-                      : bird.status === "DECEASED"
-                      ? "bg-red-100 text-red-700"
-                      : "bg-gray-100 text-gray-700"
+            <div className="flex-1 w-full space-y-4">
+              {/* Editable Fields Grid */}
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Name */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t("bird.name")}</Label>
+                  <Input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Enter name..."
+                    className="h-10 rounded-xl border-orange-100 focus:border-orange-300"
+                  />
+                </div>
+
+                {/* Status */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t("bird.status")}</Label>
+                  <Select value={editStatus} onValueChange={setEditStatus}>
+                    <SelectTrigger className="h-10 rounded-xl border-orange-100">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {language === "tl" ? opt.labelTl : opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Sex */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t("bird.sex")}</Label>
+                  <Select value={editSex} onValueChange={setEditSex}>
+                    <SelectTrigger className="h-10 rounded-xl border-orange-100">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SEX_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {language === "tl" ? opt.labelTl : opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Coop */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t("bird.coop")}</Label>
+                  <Select value={editCoopId || "none"} onValueChange={(v) => setEditCoopId(v === "none" ? null : v)}>
+                    <SelectTrigger className="h-10 rounded-xl border-orange-100">
+                      <SelectValue placeholder="Select coop..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t("common.none")}</SelectItem>
+                      {coops.map((coop) => (
+                        <SelectItem key={coop.id} value={coop.id}>
+                          {coop.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Color */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{language === "tl" ? "Kulay" : "Color"}</Label>
+                  <Input
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
+                    placeholder="Enter color..."
+                    className="h-10 rounded-xl border-orange-100 focus:border-orange-300"
+                  />
+                </div>
+
+                {/* Hatch Date (Read-only) */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t("bird.hatchDate")}</Label>
+                  <div className="h-10 px-3 flex items-center rounded-xl bg-gray-50 text-gray-700">
+                    <Calendar className="h-4 w-4 mr-2 text-gray-400" />
+                    {new Date(bird.hatchDate).toLocaleDateString()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Breed Composition - Display */}
+              <div className="pt-3 border-t border-orange-100">
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-xs text-muted-foreground">
+                    {language === "tl" ? "Lahi" : "Breed"}
+                  </Label>
+                  {/* Apply calculated breed button */}
+                  {calculatedBreed.length > 0 && JSON.stringify(calculatedBreed) !== JSON.stringify(editBreedComposition) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditBreedComposition(calculatedBreed)}
+                      className="h-6 text-xs px-2 border-purple-300 text-purple-600 hover:bg-purple-50"
+                    >
+                      Apply Calculated
+                    </Button>
                   )}
-                >
-                  {bird.status === "ACTIVE"
-                    ? t("bird.status.active")
-                    : bird.status === "SOLD"
-                    ? t("bird.status.sold")
-                    : bird.status === "DECEASED"
-                    ? t("bird.status.deceased")
-                    : bird.status}
-                </span>
-                {bird.sex === "MALE" && fights.length > 0 && (
-                  <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
-                    {wins}W-{losses}L-{draws}D ({winRate}%)
-                  </span>
+                </div>
+
+                {/* Show calculated breed or manual breed */}
+                {(calculatedBreed.length > 0 || editBreedComposition.length > 0) ? (
+                  <div className="flex flex-wrap gap-2">
+                    {(calculatedBreed.length > 0 ? calculatedBreed : editBreedComposition).map((bc) => {
+                      const breed = breeds.find((b) => b.id === bc.breedId)
+                      return (
+                        <span
+                          key={bc.breedId}
+                          className={cn(
+                            "px-3 py-1.5 rounded-xl border-2 text-sm font-medium",
+                            bc.percentage >= 50 ? "bg-purple-100 border-purple-300 text-purple-800" : "bg-gray-50 border-gray-200 text-gray-700"
+                          )}
+                        >
+                          {breed?.name} {bc.percentage}%
+                        </span>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">Set parent breeds below to calculate</p>
                 )}
               </div>
 
-              {/* Identifiers */}
+              {/* Identifiers - Read only badges */}
               {bird.identifiers?.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   {bird.identifiers.map((id) => (
                     <span
                       key={id.id}
@@ -446,47 +747,25 @@ export default function BirdDetailPage() {
                 </div>
               )}
 
-              {/* Key Details Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <Calendar className="h-4 w-4 text-gray-400" />
-                  <span className="text-muted-foreground">{t("bird.hatchDate")}:</span>
-                  <span className="font-medium">
-                    {new Date(bird.hatchDate).toLocaleDateString()}
+              {/* Fight Stats - if male with fights */}
+              {editSex === "MALE" && fights.length > 0 && (
+                <div className="pt-2">
+                  <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
+                    {wins}W-{losses}L-{draws}D ({winRate}%)
                   </span>
                 </div>
-                {bird.coop && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <Home className="h-4 w-4 text-gray-400" />
-                    <span className="text-muted-foreground">{t("bird.coop")}:</span>
-                    <span className="font-medium">{bird.coop.name}</span>
-                  </div>
-                )}
-                {bird.color && (() => {
-                  const colorInfo = getColorById(bird.color)
-                  return colorInfo ? (
-                    <div className="flex items-center gap-2 text-sm">
-                      <div
-                        className="w-4 h-4 rounded-full border"
-                        style={{ backgroundColor: colorInfo.hexCode }}
-                      />
-                      <span className="text-muted-foreground">{language === "tl" ? "Kulay" : "Color"}:</span>
-                      <span className="font-medium">
-                        {language === "tl" ? colorInfo.nameTl : colorInfo.name}
-                      </span>
-                    </div>
-                  ) : null
-                })()}
-                {bird.combType && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <Crown className="h-4 w-4 text-gray-400" />
-                    <span className="text-muted-foreground">{language === "tl" ? "Palong" : "Comb"}:</span>
-                    <span className="font-medium">
-                      {COMB_TYPE_LABELS[bird.combType]?.[language] || bird.combType}
-                    </span>
-                  </div>
-                )}
-              </div>
+              )}
+
+              {/* Comb Type - Read only if set */}
+              {bird.combType && (
+                <div className="flex items-center gap-2 text-sm pt-2">
+                  <Crown className="h-4 w-4 text-gray-400" />
+                  <span className="text-muted-foreground">{language === "tl" ? "Palong" : "Comb"}:</span>
+                  <span className="font-medium">
+                    {COMB_TYPE_LABELS[bird.combType]?.[language] || bird.combType}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </CardContent>
@@ -528,8 +807,9 @@ export default function BirdDetailPage() {
       {/* Tab Content */}
       {activeTab === "overview" && (
         <>
-          {/* Parents */}
+          {/* Parents with Breed Inputs */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Father/Sire Card */}
             <Card className="card-warm">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base font-medium text-gray-600 flex items-center gap-2">
@@ -537,58 +817,61 @@ export default function BirdDetailPage() {
                   {t("bird.father")}
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                {bird.sire ? (
-                  <div className="space-y-2">
-                    <Link
-                      href={`/birds/${bird.sire.id}`}
-                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
-                    >
-                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                        <Bird className="h-5 w-5 text-blue-600" />
-                      </div>
-                      <span className="font-medium">{getDisplayId(bird.sire)}</span>
-                    </Link>
-                    {/* Father's Breed Composition */}
-                    {bird.sire.breedComposition && bird.sire.breedComposition.length > 0 && (
-                      <div className="ml-2 pl-3 border-l-2 border-blue-100">
-                        <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                          <Dna className="h-3 w-3" />
-                          {language === "tl" ? "Lahi" : "Breeds"}
-                        </p>
-                        <p className="text-sm text-gray-700">
-                          {formatBreedComposition(bird.sire.breedComposition)}
-                        </p>
-                        <Link
-                          href={`/birds/${bird.sire.id}/edit`}
-                          className="text-xs text-blue-600 hover:underline flex items-center gap-1 mt-1"
-                        >
-                          <Edit className="h-3 w-3" />
-                          {language === "tl" ? "I-edit ang lahi" : "Edit breeds"}
-                        </Link>
-                      </div>
-                    )}
-                    {(!bird.sire.breedComposition || bird.sire.breedComposition.length === 0) && (
-                      <div className="ml-2 pl-3 border-l-2 border-gray-100">
-                        <p className="text-xs text-gray-400 mb-1">
-                          {language === "tl" ? "Walang lahi" : "No breeds set"}
-                        </p>
-                        <Link
-                          href={`/birds/${bird.sire.id}/edit`}
-                          className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-                        >
-                          <Edit className="h-3 w-3" />
-                          {language === "tl" ? "Magdagdag ng lahi" : "Add breeds"}
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground py-3">{t("common.none")}</p>
+              <CardContent className="space-y-3">
+                {bird.sire && (
+                  <Link
+                    href={`/birds/${bird.sire.id}`}
+                    className="flex items-center gap-3 p-2 rounded-xl hover:bg-blue-50 transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Bird className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <span className="font-medium">{getDisplayId(bird.sire)}</span>
+                  </Link>
                 )}
+
+                {/* Sire Breed Input */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-blue-600 font-medium">Sire Breed</Label>
+                  {sireBreed.length > 0 && (
+                    <div className="space-y-1">
+                      {sireBreed.map((bc) => {
+                        const breed = breeds.find((b) => b.id === bc.breedId)
+                        return (
+                          <div key={bc.breedId} className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
+                            <span className="text-sm flex-1 text-blue-800">{breed?.name}</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={bc.percentage}
+                              onChange={(e) => updateParentBreedPercentage("sire", bc.breedId, parseInt(e.target.value) || 0)}
+                              className="w-14 h-7 px-1 text-sm text-center rounded border border-blue-300 bg-white"
+                            />
+                            <span className="text-sm">%</span>
+                            <button onClick={() => removeParentBreed("sire", bc.breedId)} className="text-red-400 hover:text-red-600">
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <Select key={sireSelectKey} onValueChange={(v) => addParentBreed("sire", v)}>
+                    <SelectTrigger className="h-8 text-sm rounded-lg border-blue-200">
+                      <SelectValue placeholder="+ Add breed" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {breeds.filter((b) => !sireBreed.some((bc) => bc.breedId === b.id)).map((breed) => (
+                        <SelectItem key={breed.id} value={breed.id}>{breed.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </CardContent>
             </Card>
 
+            {/* Mother/Dam Card */}
             <Card className="card-warm">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base font-medium text-gray-600 flex items-center gap-2">
@@ -596,167 +879,60 @@ export default function BirdDetailPage() {
                   {t("bird.mother")}
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                {bird.dam ? (
-                  <div className="space-y-2">
-                    <Link
-                      href={`/birds/${bird.dam.id}`}
-                      className="flex items-center gap-3 p-3 rounded-xl hover:bg-orange-50 transition-colors -mx-3"
-                    >
-                      <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
-                        <Bird className="h-5 w-5 text-pink-600" />
-                      </div>
-                      <span className="font-medium">{getDisplayId(bird.dam)}</span>
-                    </Link>
-                    {/* Mother's Breed Composition */}
-                    {bird.dam.breedComposition && bird.dam.breedComposition.length > 0 && (
-                      <div className="ml-2 pl-3 border-l-2 border-pink-100">
-                        <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                          <Dna className="h-3 w-3" />
-                          {language === "tl" ? "Lahi" : "Breeds"}
-                        </p>
-                        <p className="text-sm text-gray-700">
-                          {formatBreedComposition(bird.dam.breedComposition)}
-                        </p>
-                        <Link
-                          href={`/birds/${bird.dam.id}/edit`}
-                          className="text-xs text-pink-600 hover:underline flex items-center gap-1 mt-1"
-                        >
-                          <Edit className="h-3 w-3" />
-                          {language === "tl" ? "I-edit ang lahi" : "Edit breeds"}
-                        </Link>
-                      </div>
-                    )}
-                    {(!bird.dam.breedComposition || bird.dam.breedComposition.length === 0) && (
-                      <div className="ml-2 pl-3 border-l-2 border-gray-100">
-                        <p className="text-xs text-gray-400 mb-1">
-                          {language === "tl" ? "Walang lahi" : "No breeds set"}
-                        </p>
-                        <Link
-                          href={`/birds/${bird.dam.id}/edit`}
-                          className="text-xs text-pink-600 hover:underline flex items-center gap-1"
-                        >
-                          <Edit className="h-3 w-3" />
-                          {language === "tl" ? "Magdagdag ng lahi" : "Add breeds"}
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground py-3">{t("common.none")}</p>
+              <CardContent className="space-y-3">
+                {bird.dam && (
+                  <Link
+                    href={`/birds/${bird.dam.id}`}
+                    className="flex items-center gap-3 p-2 rounded-xl hover:bg-pink-50 transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
+                      <Bird className="h-5 w-5 text-pink-600" />
+                    </div>
+                    <span className="font-medium">{getDisplayId(bird.dam)}</span>
+                  </Link>
                 )}
+
+                {/* Dam Breed Input */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-pink-600 font-medium">Dam Breed</Label>
+                  {damBreed.length > 0 && (
+                    <div className="space-y-1">
+                      {damBreed.map((bc) => {
+                        const breed = breeds.find((b) => b.id === bc.breedId)
+                        return (
+                          <div key={bc.breedId} className="flex items-center gap-2 p-2 bg-pink-50 rounded-lg">
+                            <span className="text-sm flex-1 text-pink-800">{breed?.name}</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={bc.percentage}
+                              onChange={(e) => updateParentBreedPercentage("dam", bc.breedId, parseInt(e.target.value) || 0)}
+                              className="w-14 h-7 px-1 text-sm text-center rounded border border-pink-300 bg-white"
+                            />
+                            <span className="text-sm">%</span>
+                            <button onClick={() => removeParentBreed("dam", bc.breedId)} className="text-red-400 hover:text-red-600">
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <Select key={damSelectKey} onValueChange={(v) => addParentBreed("dam", v)}>
+                    <SelectTrigger className="h-8 text-sm rounded-lg border-pink-200">
+                      <SelectValue placeholder="+ Add breed" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {breeds.filter((b) => !damBreed.some((bc) => bc.breedId === b.id)).map((breed) => (
+                        <SelectItem key={breed.id} value={breed.id}>{breed.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </CardContent>
             </Card>
           </div>
-
-          {/* Breed Composition Section */}
-          <Card className="card-warm">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-base font-medium text-gray-600 flex items-center gap-2">
-                <Dna className="h-4 w-4" />
-                {language === "tl" ? "Komposisyon ng Lahi" : "Breed Composition"}
-              </CardTitle>
-              {!editingBreeds && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setEditingBreeds(true)}
-                  className="text-orange-600 hover:bg-orange-50"
-                >
-                  <Edit className="h-4 w-4 mr-1" />
-                  {t("action.edit")}
-                </Button>
-              )}
-              {editingBreeds && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleCancelBreedEdit}
-                    className="text-gray-500"
-                    disabled={savingBreeds}
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    {t("action.cancel")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={handleSaveBreeds}
-                    className="bg-orange-500 hover:bg-orange-600 text-white"
-                    disabled={savingBreeds}
-                  >
-                    <Save className="h-4 w-4 mr-1" />
-                    {savingBreeds ? t("common.loading") : t("action.save")}
-                  </Button>
-                </div>
-              )}
-            </CardHeader>
-            <CardContent>
-              {editingBreeds ? (
-                <BreedCompositionEditor
-                  value={breedComposition}
-                  onChange={setBreedComposition}
-                  breeds={breeds}
-                  calculatedFromParents={
-                    bird.sire || bird.dam
-                      ? calculateChildBreedComposition(
-                          bird.sire?.breedComposition || null,
-                          bird.dam?.breedComposition || null
-                        )
-                      : null
-                  }
-                  isOverride={breedOverride}
-                  onOverrideChange={setBreedOverride}
-                />
-              ) : (
-                <>
-                  {bird.breedComposition && bird.breedComposition.length > 0 ? (
-                    <div className="space-y-2">
-                      {bird.breedComposition.map((entry, index) => (
-                        <div
-                          key={index}
-                          className="flex items-center justify-between p-3 rounded-xl bg-orange-50"
-                        >
-                          <span className="font-medium text-gray-700">
-                            {getBreedName(entry.breedId)}
-                          </span>
-                          <span className="text-orange-600 font-semibold">
-                            {entry.percentage}%
-                          </span>
-                        </div>
-                      ))}
-                      {bird.breedOverride && (bird.sire || bird.dam) && (
-                        <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
-                          <AlertTriangle className="h-3 w-3" />
-                          {language === "tl"
-                            ? "Manu-manong na-override (hindi kinalkula mula sa mga magulang)"
-                            : "Manually overridden (not calculated from parents)"}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-center py-6">
-                      <Dna className="h-10 w-10 mx-auto text-gray-200 mb-2" />
-                      <p className="text-muted-foreground mb-3">
-                        {language === "tl"
-                          ? "Walang naka-set na komposisyon ng lahi"
-                          : "No breed composition set"}
-                      </p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditingBreeds(true)}
-                        className="border-orange-200 text-orange-600 hover:bg-orange-50"
-                      >
-                        <Edit className="h-4 w-4 mr-1" />
-                        {language === "tl" ? "Magdagdag ng Lahi" : "Add Breeds"}
-                      </Button>
-                    </div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
 
           {/* Quick Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

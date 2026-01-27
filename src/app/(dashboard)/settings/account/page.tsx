@@ -12,11 +12,11 @@ import {
   LogOut,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
-import { useSession, signOut } from "next-auth/react"
+import { useAuth } from "@/components/providers/auth-provider"
 
 export default function AccountSettingsPage() {
   const { t } = useLanguage()
-  const { data: session } = useSession()
+  const { profile, signOut } = useAuth()
 
   return (
     <div className="p-4 lg:p-8 space-y-6 page-transition">
@@ -49,13 +49,13 @@ export default function AccountSettingsPage() {
           <div className="flex items-center gap-4 p-4 bg-orange-50 rounded-xl">
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 flex items-center justify-center">
               <span className="text-2xl font-bold text-orange-600">
-                {session?.user?.name?.charAt(0).toUpperCase() || "U"}
+                {profile?.name?.charAt(0).toUpperCase() || "U"}
               </span>
             </div>
             <div>
-              <p className="text-lg font-semibold text-gray-800">{session?.user?.name}</p>
+              <p className="text-lg font-semibold text-gray-800">{profile?.name}</p>
               <span className="inline-block px-2 py-0.5 bg-orange-100 text-orange-600 text-xs font-medium rounded-full capitalize">
-                {session?.user?.role?.toLowerCase()}
+                {profile?.role?.toLowerCase()}
               </span>
             </div>
           </div>
@@ -65,7 +65,7 @@ export default function AccountSettingsPage() {
               <Mail className="h-5 w-5 text-gray-500" />
               <div>
                 <p className="text-xs text-muted-foreground">Email</p>
-                <p className="font-medium">{session?.user?.email}</p>
+                <p className="font-medium">{profile?.email}</p>
               </div>
             </div>
 
@@ -73,7 +73,7 @@ export default function AccountSettingsPage() {
               <Shield className="h-5 w-5 text-gray-500" />
               <div>
                 <p className="text-xs text-muted-foreground">Role</p>
-                <p className="font-medium capitalize">{session?.user?.role?.toLowerCase()}</p>
+                <p className="font-medium capitalize">{profile?.role?.toLowerCase()}</p>
               </div>
             </div>
 
@@ -98,7 +98,7 @@ export default function AccountSettingsPage() {
         <CardContent className="p-4">
           <Button
             variant="outline"
-            onClick={() => signOut({ callbackUrl: "/login" })}
+            onClick={() => signOut()}
             className="w-full h-12 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
           >
             <LogOut className="h-5 w-5 mr-2" />

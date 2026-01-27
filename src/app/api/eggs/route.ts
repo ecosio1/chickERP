@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -16,6 +16,7 @@ const createEggSchema = z.object({
 export async function GET(req: NextRequest) {
   try {
     await requireAuth()
+    const supabase = await createClient()
 
     const { searchParams } = new URL(req.url)
     const birdId = searchParams.get("birdId")
@@ -23,37 +24,33 @@ export async function GET(req: NextRequest) {
     const endDate = searchParams.get("endDate")
     const limit = parseInt(searchParams.get("limit") || "100")
 
-    const where: Record<string, unknown> = {}
+    let query = supabase
+      .from('egg_records')
+      .select(`
+        *,
+        bird:birds(id, name, identifiers:bird_identifiers(*)),
+        recorded_by:profiles(id, name),
+        incubation:incubation_records(*)
+      `)
+      .order('date', { ascending: false })
+      .limit(limit)
 
     if (birdId) {
-      where.birdId = birdId
+      query = query.eq('bird_id', birdId)
     }
 
     if (startDate && endDate) {
-      where.date = {
-        gte: new Date(startDate),
-        lte: new Date(endDate),
-      }
+      query = query.gte('date', startDate).lte('date', endDate)
     }
 
-    const eggs = await prisma.eggRecord.findMany({
-      where,
-      include: {
-        bird: {
-          select: {
-            id: true,
-            name: true,
-            identifiers: true,
-          },
-        },
-        recordedBy: { select: { id: true, name: true } },
-        incubation: true,
-      },
-      orderBy: { date: "desc" },
-      take: limit,
-    })
+    const { data: eggs, error } = await query
 
-    return successResponse(eggs)
+    if (error) {
+      console.error("GET /api/eggs error:", error)
+      return errorResponse("Failed to fetch eggs", 500)
+    }
+
+    return successResponse(eggs || [])
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
       return errorResponse("Unauthorized", 401)
@@ -67,36 +64,47 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
 
     const body = await req.json()
     const data = createEggSchema.parse(body)
 
     // Verify bird exists and is female
-    const bird = await prisma.bird.findUnique({ where: { id: data.birdId } })
-    if (!bird) {
+    const { data: bird, error: birdError } = await supabase
+      .from('birds')
+      .select('id, sex')
+      .eq('id', data.birdId)
+      .single()
+
+    if (birdError || !bird) {
       return errorResponse("Bird not found", 404)
     }
     if (bird.sex !== "FEMALE") {
       return errorResponse("Only female birds can lay eggs", 400)
     }
 
-    const egg = await prisma.eggRecord.create({
-      data: {
-        birdId: data.birdId,
-        date: data.date,
-        eggMark: data.eggMark,
-        weightGrams: data.weightGrams,
-        shellQuality: data.shellQuality,
+    const { data: egg, error: eggError } = await supabase
+      .from('egg_records')
+      .insert({
+        bird_id: data.birdId,
+        date: data.date.toISOString(),
+        egg_mark: data.eggMark,
+        weight_grams: data.weightGrams,
+        shell_quality: data.shellQuality,
         notes: data.notes,
-        recordedById: session.user.id,
-      },
-      include: {
-        bird: {
-          select: { id: true, name: true, identifiers: true },
-        },
-        recordedBy: { select: { id: true, name: true } },
-      },
-    })
+        recorded_by: session.user.id,
+      })
+      .select(`
+        *,
+        bird:birds(id, name, identifiers:bird_identifiers(*)),
+        recorded_by:profiles(id, name)
+      `)
+      .single()
+
+    if (eggError || !egg) {
+      console.error("POST /api/eggs error:", eggError)
+      return errorResponse("Failed to create egg record", 500)
+    }
 
     return successResponse(egg, 201)
   } catch (error) {

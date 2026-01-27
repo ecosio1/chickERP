@@ -14,7 +14,7 @@ import {
   Building2,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
-import { useSession } from "next-auth/react"
+import { useAuth } from "@/components/providers/auth-provider"
 
 const settingsSections = [
   {
@@ -94,7 +94,7 @@ const settingsSections = [
 
 export default function SettingsPage() {
   const { t, language } = useLanguage()
-  const { data: session } = useSession()
+  const { profile } = useAuth()
 
   return (
     <div className="p-4 lg:p-8 space-y-6 page-transition">
@@ -113,14 +113,14 @@ export default function SettingsPage() {
         <CardContent className="flex items-center gap-4 p-6">
           <div className="w-16 h-16 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 flex items-center justify-center">
             <span className="text-2xl font-bold text-orange-600">
-              {session?.user?.name?.charAt(0).toUpperCase() || "U"}
+              {profile?.name?.charAt(0).toUpperCase() || "U"}
             </span>
           </div>
           <div>
-            <p className="text-lg font-semibold text-gray-800">{session?.user?.name}</p>
-            <p className="text-sm text-muted-foreground">{session?.user?.email}</p>
+            <p className="text-lg font-semibold text-gray-800">{profile?.name}</p>
+            <p className="text-sm text-muted-foreground">{profile?.email}</p>
             <span className="inline-block mt-1 px-2 py-0.5 bg-orange-100 text-orange-600 text-xs font-medium rounded-full capitalize">
-              {session?.user?.role?.toLowerCase()}
+              {profile?.role?.toLowerCase()}
             </span>
           </div>
         </CardContent>

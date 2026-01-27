@@ -16,13 +16,6 @@ import {
   Bird,
 } from "lucide-react"
 import { useLanguage } from "@/hooks/use-language"
-import * as XLSX from "xlsx"
-
-interface BreedEntry {
-  name?: string
-  code?: string
-  percentage: number
-}
 
 interface ParsedRow {
   rowNumber: number
@@ -36,7 +29,6 @@ interface ParsedRow {
   bandNumber: string
   breedName?: string
   breedCode?: string
-  breeds?: BreedEntry[]  // Multiple breeds with percentages
   color?: string
   notes?: string
   error?: string
@@ -98,15 +90,6 @@ export default function ImportBirdsPage() {
     const breedCodeIdx = headers.findIndex(
       (h) => h === "breed_code" || h === "breedcode"
     )
-    // Multi-breed columns: breed1, breed1_pct, breed2, breed2_pct, etc.
-    const breedColumns: { nameIdx: number; pctIdx: number }[] = []
-    for (let i = 1; i <= 4; i++) {
-      const nameIdx = headers.findIndex((h) => h === `breed${i}` || h === `breed${i}_name`)
-      const pctIdx = headers.findIndex((h) => h === `breed${i}_pct` || h === `breed${i}_percentage` || h === `breed${i}%`)
-      if (nameIdx !== -1) {
-        breedColumns.push({ nameIdx, pctIdx })
-      }
-    }
     const colorIdx = headers.findIndex((h) => h === "color" || h === "kulay")
     const notesIdx = headers.findIndex((h) => h === "notes" || h === "tala")
 
@@ -122,17 +105,6 @@ export default function ImportBirdsPage() {
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(",").map((v) => v.trim())
 
-      // Parse multiple breeds if columns exist
-      const breeds: BreedEntry[] = []
-      for (const bc of breedColumns) {
-        const breedName = values[bc.nameIdx]?.trim()
-        if (breedName) {
-          const pctStr = bc.pctIdx >= 0 ? values[bc.pctIdx]?.trim() : ""
-          const percentage = pctStr ? parseFloat(pctStr) : 0
-          breeds.push({ name: breedName, percentage: percentage || 0 })
-        }
-      }
-
       const row: ParsedRow = {
         rowNumber: i + 1,
         name: nameIdx >= 0 ? values[nameIdx] || "" : "",
@@ -145,7 +117,6 @@ export default function ImportBirdsPage() {
         bandNumber: bandIdx >= 0 ? values[bandIdx] || "" : "",
         breedName: breedNameIdx >= 0 ? values[breedNameIdx] || "" : "",
         breedCode: breedCodeIdx >= 0 ? values[breedCodeIdx]?.toUpperCase() || "" : "",
-        breeds: breeds.length > 0 ? breeds : undefined,
         color: colorIdx >= 0 ? values[colorIdx] || "" : "",
         notes: notesIdx >= 0 ? values[notesIdx] || "" : "",
       }
@@ -172,146 +143,12 @@ export default function ImportBirdsPage() {
     return rows
   }
 
-  const parseExcel = (buffer: ArrayBuffer): ParsedRow[] => {
-    const workbook = XLSX.read(buffer, { type: "array" })
-    const sheetName = workbook.SheetNames[0]
-    const worksheet = workbook.Sheets[sheetName]
-
-    // Convert to JSON with header row
-    const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
-      raw: false,
-      defval: ""
-    })
-
-    if (jsonData.length === 0) {
-      throw new Error("Excel file must have at least one data row")
-    }
-
-    // Get headers from first row keys and normalize them
-    const firstRow = jsonData[0]
-    const headerMap: Record<string, string> = {}
-    Object.keys(firstRow).forEach((key) => {
-      headerMap[key.toLowerCase().trim()] = key
-    })
-
-    // Map expected columns
-    const findHeader = (options: string[]): string | undefined => {
-      for (const opt of options) {
-        const found = Object.keys(headerMap).find(h => h === opt)
-        if (found) return headerMap[found]
-      }
-      return undefined
-    }
-
-    const nameKey = findHeader(["name", "pangalan"])
-    const sexKey = findHeader(["sex", "kasarian"])
-    const hatchDateKey = findHeader(["hatch_date", "hatchdate", "petsa_ng_pagpisa"])
-    const statusKey = findHeader(["status", "estado"])
-    const coopKey = findHeader(["coop", "kulungan"])
-    const sireKey = findHeader(["sire", "father", "ama"])
-    const damKey = findHeader(["dam", "mother", "ina"])
-    const bandKey = findHeader(["band", "band_number", "tatak"])
-    const breedNameKey = findHeader(["breed", "breed_name", "lahi"])
-    const breedCodeKey = findHeader(["breed_code", "breedcode"])
-    // Multi-breed columns: breed1, breed1_pct, breed2, breed2_pct, etc.
-    const breedColumnKeys: { nameKey?: string; pctKey?: string }[] = []
-    for (let i = 1; i <= 4; i++) {
-      const nameKey = findHeader([`breed${i}`, `breed${i}_name`])
-      const pctKey = findHeader([`breed${i}_pct`, `breed${i}_percentage`, `breed${i}%`])
-      if (nameKey) {
-        breedColumnKeys.push({ nameKey, pctKey })
-      }
-    }
-    const colorKey = findHeader(["color", "kulay"])
-    const notesKey = findHeader(["notes", "tala"])
-
-    if (!sexKey) {
-      throw new Error("Excel file must have a 'sex' column (MALE, FEMALE, or UNKNOWN)")
-    }
-    if (!hatchDateKey) {
-      throw new Error("Excel file must have a 'hatch_date' column (YYYY-MM-DD format)")
-    }
-
-    const rows: ParsedRow[] = []
-
-    jsonData.forEach((data, index) => {
-      const getValue = (key: string | undefined): string => {
-        if (!key) return ""
-        const value = data[key]
-        return value !== undefined && value !== null ? String(value).trim() : ""
-      }
-
-      // Handle Excel date formatting
-      let hatchDate = getValue(hatchDateKey)
-      // If it looks like a date number from Excel, try to convert it
-      if (/^\d+$/.test(hatchDate) && parseInt(hatchDate) > 30000) {
-        // Excel serial date
-        const excelDate = XLSX.SSF.parse_date_code(parseInt(hatchDate))
-        if (excelDate) {
-          hatchDate = `${excelDate.y}-${String(excelDate.m).padStart(2, '0')}-${String(excelDate.d).padStart(2, '0')}`
-        }
-      }
-
-      // Parse multiple breeds if columns exist
-      const breeds: BreedEntry[] = []
-      for (const bc of breedColumnKeys) {
-        const breedName = getValue(bc.nameKey)
-        if (breedName) {
-          const pctStr = getValue(bc.pctKey)
-          const percentage = pctStr ? parseFloat(pctStr) : 0
-          breeds.push({ name: breedName, percentage: percentage || 0 })
-        }
-      }
-
-      const row: ParsedRow = {
-        rowNumber: index + 2, // +2 because row 1 is header, and we're 0-indexed
-        name: getValue(nameKey),
-        sex: getValue(sexKey).toUpperCase(),
-        hatchDate: hatchDate,
-        status: getValue(statusKey).toUpperCase() || "ACTIVE",
-        coopName: getValue(coopKey),
-        sireName: getValue(sireKey),
-        damName: getValue(damKey),
-        bandNumber: getValue(bandKey),
-        breedName: getValue(breedNameKey),
-        breedCode: getValue(breedCodeKey).toUpperCase(),
-        breeds: breeds.length > 0 ? breeds : undefined,
-        color: getValue(colorKey),
-        notes: getValue(notesKey),
-      }
-
-      // Validate sex
-      if (!["MALE", "FEMALE", "UNKNOWN"].includes(row.sex)) {
-        row.error = `Invalid sex: "${row.sex}". Must be MALE, FEMALE, or UNKNOWN`
-      }
-
-      // Validate date
-      if (row.hatchDate && !/^\d{4}-\d{2}-\d{2}$/.test(row.hatchDate)) {
-        row.error = `Invalid date format: "${row.hatchDate}". Use YYYY-MM-DD`
-      }
-
-      // Validate status
-      const validStatuses = ["ACTIVE", "SOLD", "DECEASED", "CULLED", "LOST", "BREEDING", "RETIRED"]
-      if (row.status && !validStatuses.includes(row.status)) {
-        row.error = `Invalid status: "${row.status}"`
-      }
-
-      rows.push(row)
-    })
-
-    return rows
-  }
-
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
 
-    const fileName = selectedFile.name.toLowerCase()
-    const isCSV = fileName.endsWith(".csv")
-    const isExcel = fileName.endsWith(".xlsx") || fileName.endsWith(".xls")
-
-    if (!isCSV && !isExcel) {
-      setParseError("Please select a CSV or Excel file (.csv, .xlsx, .xls)")
+    if (!selectedFile.name.endsWith(".csv")) {
+      setParseError("Please select a CSV file")
       return
     }
 
@@ -321,17 +158,11 @@ export default function ImportBirdsPage() {
     setParsing(true)
 
     try {
-      if (isCSV) {
-        const content = await selectedFile.text()
-        const parsed = parseCSV(content)
-        setParsedData(parsed)
-      } else {
-        const buffer = await selectedFile.arrayBuffer()
-        const parsed = parseExcel(buffer)
-        setParsedData(parsed)
-      }
+      const content = await selectedFile.text()
+      const parsed = parseCSV(content)
+      setParsedData(parsed)
     } catch (err) {
-      setParseError(err instanceof Error ? err.message : "Failed to parse file")
+      setParseError(err instanceof Error ? err.message : "Failed to parse CSV")
       setParsedData([])
     } finally {
       setParsing(false)
@@ -375,29 +206,18 @@ export default function ImportBirdsPage() {
     }
   }
 
-  const downloadTemplate = (format: "csv" | "xlsx") => {
-    const headers = ["name", "sex", "hatch_date", "status", "coop", "breed1", "breed1_pct", "breed2", "breed2_pct", "color", "sire", "dam", "band_number", "notes"]
-    const sampleData = [
-      ["Rooster 1", "MALE", "2024-01-15", "ACTIVE", "Coop A", "Rhode Island Red", "100", "", "", "Red", "Father Bird", "Mother Bird", "BAND001", "Pure breed"],
-      ["Hen 1", "FEMALE", "2024-02-20", "ACTIVE", "Coop B", "Aseel", "50", "Kelso", "50", "Black", "", "", "BAND002", "Crossbreed"],
-      ["Chick 1", "UNKNOWN", "2024-06-01", "ACTIVE", "Brooder", "Rhode Island Red", "25", "Aseel", "75", "Brown", "Rooster 1", "Hen 1", "BAND003", "Offspring"],
-    ]
+  const downloadTemplate = () => {
+    const template = `name,sex,hatch_date,status,coop,breed,breed_code,color,sire,dam,band_number,notes
+Rooster 1,MALE,2024-01-15,ACTIVE,Coop A,Rhode Island Red,RIR,Red,Father Bird,Mother Bird,BAND001,Imported bird
+Hen 1,FEMALE,2024-02-20,ACTIVE,Coop B,Aseel,ASEL,Black,,,BAND002,`
 
-    if (format === "csv") {
-      const csvContent = [headers.join(","), ...sampleData.map(row => row.join(","))].join("\n")
-      const blob = new Blob([csvContent], { type: "text/csv" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = "birds_import_template.csv"
-      a.click()
-      URL.revokeObjectURL(url)
-    } else {
-      const worksheet = XLSX.utils.aoa_to_sheet([headers, ...sampleData])
-      const workbook = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Birds")
-      XLSX.writeFile(workbook, "birds_import_template.xlsx")
-    }
+    const blob = new Blob([template], { type: "text/csv" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "birds_import_template.csv"
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const clearFile = () => {
@@ -428,8 +248,8 @@ export default function ImportBirdsPage() {
           </h1>
           <p className="text-muted-foreground">
             {language === "tl"
-              ? "Mag-upload ng CSV o Excel file para mag-import ng maraming ibon"
-              : "Upload a CSV or Excel file to import multiple birds at once"}
+              ? "Mag-upload ng CSV file para mag-import ng maraming ibon"
+              : "Upload a CSV file to import multiple birds at once"}
           </p>
         </div>
       </div>
@@ -459,7 +279,12 @@ export default function ImportBirdsPage() {
                   {importResult.failed > 0 &&
                     `, ${importResult.failed} ${language === "tl" ? "nabigo" : "failed"}`}
                 </p>
-                {importResult.autoCreated && (importResult.autoCreated.coops.length > 0 || importResult.autoCreated.breeds.length > 0 || importResult.autoCreated.sires?.length > 0 || importResult.autoCreated.dams?.length > 0) && (
+                {importResult.autoCreated && (
+                  importResult.autoCreated.coops.length > 0 ||
+                  importResult.autoCreated.breeds.length > 0 ||
+                  importResult.autoCreated.sires?.length > 0 ||
+                  importResult.autoCreated.dams?.length > 0
+                ) && (
                   <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                     <p className="text-sm font-medium text-blue-700 mb-1">
                       {language === "tl" ? "Awtomatikong Nalikha:" : "Auto-Created:"}
@@ -478,13 +303,13 @@ export default function ImportBirdsPage() {
                     )}
                     {importResult.autoCreated.sires && importResult.autoCreated.sires.length > 0 && (
                       <p className="text-sm text-blue-600">
-                        {language === "tl" ? "Mga Ama (Sire): " : "Sires (Fathers): "}
+                        {language === "tl" ? "Mga Ama (Sire): " : "Sires: "}
                         {importResult.autoCreated.sires.join(", ")}
                       </p>
                     )}
                     {importResult.autoCreated.dams && importResult.autoCreated.dams.length > 0 && (
                       <p className="text-sm text-blue-600">
-                        {language === "tl" ? "Mga Ina (Dam): " : "Dams (Mothers): "}
+                        {language === "tl" ? "Mga Ina (Dam): " : "Dams: "}
                         {importResult.autoCreated.dams.join(", ")}
                       </p>
                     )}
@@ -522,7 +347,7 @@ export default function ImportBirdsPage() {
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-gray-700 flex items-center gap-2">
             <FileSpreadsheet className="h-5 w-5 text-orange-500" />
-            {language === "tl" ? "Template ng File" : "File Template"}
+            {language === "tl" ? "Template ng CSV" : "CSV Template"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -531,24 +356,14 @@ export default function ImportBirdsPage() {
               ? "I-download ang template na ito at punan ng data ng iyong mga ibon."
               : "Download this template and fill it with your bird data."}
           </p>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => downloadTemplate("xlsx")}
-              variant="outline"
-              className="rounded-xl border-2 border-orange-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Excel Template
-            </Button>
-            <Button
-              onClick={() => downloadTemplate("csv")}
-              variant="outline"
-              className="rounded-xl border-2 border-orange-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              CSV Template
-            </Button>
-          </div>
+          <Button
+            onClick={downloadTemplate}
+            variant="outline"
+            className="rounded-xl border-2 border-orange-100"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {language === "tl" ? "I-download ang Template" : "Download Template"}
+          </Button>
 
           <div className="mt-4 p-4 bg-orange-50 rounded-xl">
             <p className="text-sm font-medium text-gray-700 mb-2">
@@ -576,13 +391,10 @@ export default function ImportBirdsPage() {
                 <code className="bg-orange-100 px-1 rounded">coop</code> - Coop name (auto-created if not exists)
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">breed1</code>, <code className="bg-orange-100 px-1 rounded">breed1_pct</code> - First breed name and percentage
+                <code className="bg-orange-100 px-1 rounded">breed</code> - Breed name (auto-created if not exists)
               </li>
               <li>
-                <code className="bg-orange-100 px-1 rounded">breed2</code>, <code className="bg-orange-100 px-1 rounded">breed2_pct</code> - Second breed name and percentage
-              </li>
-              <li>
-                <code className="bg-orange-100 px-1 rounded">breed3</code>, <code className="bg-orange-100 px-1 rounded">breed3_pct</code> - Third breed (up to 4 breeds supported)
+                <code className="bg-orange-100 px-1 rounded">breed_code</code> - Breed code (optional, auto-generated)
               </li>
               <li>
                 <code className="bg-orange-100 px-1 rounded">color</code> - Bird color
@@ -614,7 +426,7 @@ export default function ImportBirdsPage() {
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-gray-700 flex items-center gap-2">
             <Upload className="h-5 w-5 text-orange-500" />
-            {language === "tl" ? "Mag-upload ng File" : "Upload File"}
+            {language === "tl" ? "Mag-upload ng CSV" : "Upload CSV"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -628,12 +440,12 @@ export default function ImportBirdsPage() {
                   </span>{" "}
                   {language === "tl" ? "o i-drag at i-drop" : "or drag and drop"}
                 </p>
-                <p className="text-xs text-muted-foreground">CSV or Excel files (.csv, .xlsx, .xls)</p>
+                <p className="text-xs text-muted-foreground">CSV files only</p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,.xlsx,.xls"
+                accept=".csv"
                 onChange={handleFileSelect}
                 className="hidden"
               />
@@ -731,11 +543,7 @@ export default function ImportBirdsPage() {
                       </td>
                       <td className="p-3">{row.hatchDate}</td>
                       <td className="p-3">{row.coopName || "-"}</td>
-                      <td className="p-3">
-                        {row.breeds && row.breeds.length > 0
-                          ? row.breeds.map((b, i) => `${b.name} ${b.percentage}%`).join(", ")
-                          : row.breedName || "-"}
-                      </td>
+                      <td className="p-3">{row.breedName || "-"}</td>
                       <td className="p-3">{row.color || "-"}</td>
                       <td className="p-3">{row.bandNumber || "-"}</td>
                       <td className="p-3">

@@ -1,13 +1,40 @@
 import { NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "./auth"
+import { createClient } from "./supabase/server"
 import { z } from "zod"
 
-export async function getSession() {
-  return await getServerSession(authOptions)
+export type Session = {
+  user: {
+    id: string
+    email: string
+    name: string
+    role: string
+  }
 }
 
-export async function requireAuth() {
+export async function getSession(): Promise<Session | null> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) return null
+
+  // Get profile data
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('name, role')
+    .eq('id', user.id)
+    .single()
+
+  return {
+    user: {
+      id: user.id,
+      email: user.email!,
+      name: profile?.name || user.email!.split('@')[0],
+      role: profile?.role || 'WORKER',
+    }
+  }
+}
+
+export async function requireAuth(): Promise<Session> {
   const session = await getSession()
   if (!session) {
     throw new Error("Unauthorized")

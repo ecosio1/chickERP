@@ -1,21 +1,26 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
+import { requireAuth } from "@/lib/api-utils"
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    await requireAuth()
+    const supabase = await createClient()
+    const { data: stages, error } = await supabase
+      .from('feed_stages')
+      .select()
+      .order('min_age_days', { ascending: true })
 
-    const stages = await prisma.feedStage.findMany({
-      orderBy: { minAgeDays: "asc" },
-    })
+    if (error) {
+      console.error("GET /api/settings/feed-stages error:", error)
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    }
 
     return NextResponse.json({ stages })
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
     console.error("GET /api/settings/feed-stages error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
@@ -23,10 +28,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    await requireAuth()
 
     const body = await req.json()
     const { name, nameTl, feedType, minAgeDays, maxAgeDays, notes } = body
@@ -35,19 +37,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Name, feed type, and min age are required" }, { status: 400 })
     }
 
-    const stage = await prisma.feedStage.create({
-      data: {
+    const supabase = await createClient()
+    const { data: stage, error } = await supabase
+      .from('feed_stages')
+      .insert({
         name,
-        nameTl: nameTl || null,
-        feedType,
-        minAgeDays: parseInt(minAgeDays),
-        maxAgeDays: maxAgeDays ? parseInt(maxAgeDays) : null,
+        name_tl: nameTl || null,
+        feed_type: feedType,
+        min_age_days: parseInt(minAgeDays),
+        max_age_days: maxAgeDays ? parseInt(maxAgeDays) : null,
         notes: notes || null,
-      },
-    })
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error("POST /api/settings/feed-stages error:", error)
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    }
 
     return NextResponse.json(stage, { status: 201 })
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
     console.error("POST /api/settings/feed-stages error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }

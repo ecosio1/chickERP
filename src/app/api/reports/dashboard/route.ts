@@ -1,9 +1,11 @@
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse } from "@/lib/api-utils"
 
 export async function GET() {
   try {
     await requireAuth()
+
+    const supabase = await createClient()
 
     const today = new Date()
     const sevenDaysAgo = new Date(today)
@@ -16,96 +18,126 @@ export async function GET() {
     nextSevenDays.setDate(nextSevenDays.getDate() + 7)
 
     const [
-      totalBirds,
-      birdsBySex,
-      recentDeaths,
-      eggsLast7Days,
-      eggsLast30Days,
-      upcomingVaccinations,
-      activeHealthIncidents,
-      feedInventory,
-      recentActivity,
+      totalBirdsResult,
+      birdsBySexResult,
+      recentDeathsResult,
+      eggsLast7DaysResult,
+      eggsLast30DaysResult,
+      upcomingVaccinationsResult,
+      activeHealthIncidentsResult,
+      feedInventoryResult,
+      recentActivityResult,
     ] = await Promise.all([
       // Total active birds
-      prisma.bird.count({ where: { status: "ACTIVE" } }),
+      supabase
+        .from('birds')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'ACTIVE'),
 
-      // Birds by sex
-      prisma.bird.groupBy({
-        by: ["sex"],
-        where: { status: "ACTIVE" },
-        _count: true,
-      }),
+      // Birds by sex (get all active birds, then group in JS)
+      supabase
+        .from('birds')
+        .select('sex')
+        .eq('status', 'ACTIVE'),
 
       // Deaths in last 7 days
-      prisma.bird.count({
-        where: {
-          status: "DECEASED",
-          updatedAt: { gte: sevenDaysAgo },
-        },
-      }),
+      supabase
+        .from('birds')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'DECEASED')
+        .gte('updated_at', sevenDaysAgo.toISOString()),
 
       // Eggs in last 7 days
-      prisma.eggRecord.count({
-        where: { date: { gte: sevenDaysAgo } },
-      }),
+      supabase
+        .from('egg_records')
+        .select('*', { count: 'exact', head: true })
+        .gte('date', sevenDaysAgo.toISOString().split('T')[0]),
 
       // Eggs in last 30 days
-      prisma.eggRecord.count({
-        where: { date: { gte: thirtyDaysAgo } },
-      }),
+      supabase
+        .from('egg_records')
+        .select('*', { count: 'exact', head: true })
+        .gte('date', thirtyDaysAgo.toISOString().split('T')[0]),
 
       // Vaccinations due in next 7 days
-      prisma.vaccination.count({
-        where: {
-          nextDueDate: {
-            gte: today,
-            lte: nextSevenDays,
-          },
-        },
-      }),
+      supabase
+        .from('vaccinations')
+        .select('*', { count: 'exact', head: true })
+        .gte('next_due_date', today.toISOString().split('T')[0])
+        .lte('next_due_date', nextSevenDays.toISOString().split('T')[0]),
 
       // Active health incidents
-      prisma.healthIncident.count({
-        where: { outcome: "ONGOING" },
-      }),
+      supabase
+        .from('health_incidents')
+        .select('*', { count: 'exact', head: true })
+        .eq('outcome', 'ONGOING'),
 
       // Feed inventory with low stock check
-      prisma.feedInventory.findMany({
-        select: {
-          id: true,
-          feedType: true,
-          quantityKg: true,
-          reorderLevel: true,
-        },
-      }),
+      supabase
+        .from('feed_inventory')
+        .select('id, feed_type, quantity_kg, reorder_level'),
 
-      // Recent activity (last 10 birds added)
-      prisma.bird.findMany({
-        where: { status: "ACTIVE" },
-        select: {
-          id: true,
-          name: true,
-          sex: true,
-          hatchDate: true,
-          createdAt: true,
-          identifiers: true,
-        },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-      }),
+      // Recent activity (last 5 birds added)
+      supabase
+        .from('birds')
+        .select(`
+          id,
+          name,
+          sex,
+          hatch_date,
+          created_at,
+          bird_identifiers (id, id_type, id_value)
+        `)
+        .eq('status', 'ACTIVE')
+        .order('created_at', { ascending: false })
+        .limit(5),
     ])
+
+    // Extract counts and data
+    const totalBirds = totalBirdsResult.count || 0
+    const recentDeaths = recentDeathsResult.count || 0
+    const eggsLast7Days = eggsLast7DaysResult.count || 0
+    const eggsLast30Days = eggsLast30DaysResult.count || 0
+    const upcomingVaccinations = upcomingVaccinationsResult.count || 0
+    const activeHealthIncidents = activeHealthIncidentsResult.count || 0
+    const feedInventory = feedInventoryResult.data || []
+    const recentActivity = recentActivityResult.data || []
+
+    // Calculate sex distribution from birds data
+    const birdsBySex = birdsBySexResult.data || []
+    const sexCounts = {
+      male: birdsBySex.filter((b) => b.sex === "MALE").length,
+      female: birdsBySex.filter((b) => b.sex === "FEMALE").length,
+      unknown: birdsBySex.filter((b) => b.sex === "UNKNOWN").length,
+    }
 
     // Process feed inventory for low stock alerts
     const lowStockFeeds = feedInventory.filter(
-      (f) => f.reorderLevel && f.quantityKg <= f.reorderLevel
+      (f) => f.reorder_level && f.quantity_kg <= f.reorder_level
     )
 
-    // Calculate sex distribution
-    const sexCounts = {
-      male: birdsBySex.find((b) => b.sex === "MALE")?._count || 0,
-      female: birdsBySex.find((b) => b.sex === "FEMALE")?._count || 0,
-      unknown: birdsBySex.find((b) => b.sex === "UNKNOWN")?._count || 0,
-    }
+    // Transform feed inventory to camelCase for response
+    const feedInventoryResponse = feedInventory.map((f) => ({
+      id: f.id,
+      feedType: f.feed_type,
+      quantityKg: f.quantity_kg,
+      reorderLevel: f.reorder_level,
+      isLowStock: f.reorder_level ? f.quantity_kg <= f.reorder_level : false,
+    }))
+
+    // Transform recent activity to camelCase for response
+    const recentBirds = recentActivity.map((bird) => ({
+      id: bird.id,
+      name: bird.name,
+      sex: bird.sex,
+      hatchDate: bird.hatch_date,
+      createdAt: bird.created_at,
+      identifiers: (bird.bird_identifiers || []).map((id: { id: string; id_type: string; id_value: string }) => ({
+        id: id.id,
+        idType: id.id_type,
+        idValue: id.id_value,
+      })),
+    }))
 
     return successResponse({
       summary: {
@@ -121,11 +153,8 @@ export async function GET() {
         activeHealthIncidents,
         lowStockFeedsCount: lowStockFeeds.length,
       },
-      feedInventory: feedInventory.map((f) => ({
-        ...f,
-        isLowStock: f.reorderLevel ? f.quantityKg <= f.reorderLevel : false,
-      })),
-      recentBirds: recentActivity,
+      feedInventory: feedInventoryResponse,
+      recentBirds,
     })
   } catch (error) {
     if (error instanceof Error && error.message === "Unauthorized") {
