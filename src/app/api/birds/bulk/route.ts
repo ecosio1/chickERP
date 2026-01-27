@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { prisma } from "@/lib/prisma"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth, errorResponse, successResponse, handleApiError } from "@/lib/api-utils"
 import { z } from "zod"
 
@@ -13,6 +13,7 @@ const bulkActionSchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const session = await requireAuth()
+    const supabase = await createClient()
 
     // Only OWNER can perform bulk operations
     if (session.user.role !== "OWNER") {
@@ -31,43 +32,47 @@ export async function POST(req: NextRequest) {
 
         // Validate coop exists if provided
         if (coopId) {
-          const coop = await prisma.coop.findUnique({ where: { id: coopId } })
+          const { data: coop } = await supabase
+            .from('coops')
+            .select('id')
+            .eq('id', coopId)
+            .single()
           if (!coop) {
             return errorResponse("Coop not found", 400)
           }
         }
 
-        // Update birds in transaction
-        await prisma.$transaction(async (tx) => {
-          // Close existing coop assignments
-          await tx.coopAssignment.updateMany({
-            where: {
-              birdId: { in: birdIds },
-              removedAt: null,
-            },
-            data: {
-              removedAt: new Date(),
-            },
-          })
+        // Close existing coop assignments
+        await supabase
+          .from('coop_assignments')
+          .update({ removed_at: new Date().toISOString() })
+          .in('bird_id', birdIds)
+          .is('removed_at', null)
 
-          // Update bird coop references
-          const result = await tx.bird.updateMany({
-            where: { id: { in: birdIds } },
-            data: { coopId },
-          })
-          updated = result.count
+        // Update bird coop references
+        const { data: updatedBirds, error: updateError } = await supabase
+          .from('birds')
+          .update({ coop_id: coopId })
+          .in('id', birdIds)
+          .select('id')
 
-          // Create new coop assignments if moving to a coop
-          if (coopId) {
-            await tx.coopAssignment.createMany({
-              data: birdIds.map((birdId) => ({
-                birdId,
-                coopId,
-                assignedAt: new Date(),
-              })),
-            })
-          }
-        })
+        if (updateError) {
+          console.error("Bulk move error:", updateError)
+          return errorResponse("Failed to move birds", 500)
+        }
+
+        updated = updatedBirds?.length || 0
+
+        // Create new coop assignments if moving to a coop
+        if (coopId && birdIds.length > 0) {
+          await supabase
+            .from('coop_assignments')
+            .insert(birdIds.map((birdId) => ({
+              bird_id: birdId,
+              coop_id: coopId,
+              assigned_at: new Date().toISOString(),
+            })))
+        }
         break
       }
 
@@ -79,21 +84,35 @@ export async function POST(req: NextRequest) {
           return errorResponse("Invalid status", 400)
         }
 
-        const result = await prisma.bird.updateMany({
-          where: { id: { in: birdIds } },
-          data: { status },
-        })
-        updated = result.count
+        const { data: updatedBirds, error: updateError } = await supabase
+          .from('birds')
+          .update({ status })
+          .in('id', birdIds)
+          .select('id')
+
+        if (updateError) {
+          console.error("Bulk status error:", updateError)
+          return errorResponse("Failed to update status", 500)
+        }
+
+        updated = updatedBirds?.length || 0
         break
       }
 
       case "delete": {
         // Soft delete by changing status to ARCHIVED
-        const result = await prisma.bird.updateMany({
-          where: { id: { in: birdIds } },
-          data: { status: "ARCHIVED" },
-        })
-        updated = result.count
+        const { data: updatedBirds, error: updateError } = await supabase
+          .from('birds')
+          .update({ status: "ARCHIVED" })
+          .in('id', birdIds)
+          .select('id')
+
+        if (updateError) {
+          console.error("Bulk delete error:", updateError)
+          return errorResponse("Failed to archive birds", 500)
+        }
+
+        updated = updatedBirds?.length || 0
         break
       }
 
