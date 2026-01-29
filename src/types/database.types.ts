@@ -1000,6 +1000,50 @@ export type Database = {
         }
         Relationships: []
       }
+      saved_reports: {
+        Row: {
+          id: string
+          name: string
+          description: string | null
+          report_type: string
+          config: Json
+          is_default: boolean
+          created_by: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          description?: string | null
+          report_type?: string
+          config: Json
+          is_default?: boolean
+          created_by: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          description?: string | null
+          report_type?: string
+          config?: Json
+          is_default?: boolean
+          created_by?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "saved_reports_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       source_farms: {
         Row: {
           created_at: string

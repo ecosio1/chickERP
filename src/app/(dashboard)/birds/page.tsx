@@ -57,10 +57,13 @@ interface Coop {
 }
 
 type SortDirection = "asc" | "desc" | null
-type SortColumn = "band" | "name" | "sex" | "age" | "breed" | "sire" | "dam" | "color" | "coop" | "status"
+type SortColumn = "band" | "wingTag" | "name" | "sex" | "age" | "breed" | "sire" | "dam" | "color" | "coop" | "status"
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 
 interface ColumnFilters {
   band: string
+  wingTag: string
   name: string
   sex: string
   sire: string
@@ -73,13 +76,14 @@ interface ColumnFilters {
 
 const initialColumnFilters: ColumnFilters = {
   band: "",
+  wingTag: "",
   name: "",
   sex: "",
   sire: "",
   dam: "",
   color: "",
   coop: "",
-  status: "",
+  status: "IN_STOCK", // Default to showing only active/breeding birds
   breed: "",
 }
 
@@ -104,11 +108,18 @@ function BirdsPageContent() {
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(initialColumnFilters)
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Check if any filter is active
+  // Check if any filter is active (excluding default "IN_STOCK" status)
   const hasActiveFilters = useMemo(() => {
-    return Object.values(columnFilters).some((v) => v !== "")
+    return Object.entries(columnFilters).some(([key, v]) => {
+      if (key === "status") return v !== "" && v !== "IN_STOCK"
+      return v !== ""
+    })
   }, [columnFilters])
 
   // Get unique values for dropdowns from current data
@@ -180,18 +191,21 @@ function BirdsPageContent() {
     return band?.id_value || ""
   }
 
+  const getWingTag = (bird: BirdRecord) => {
+    const wingBand = bird.identifiers?.find((id) => id.id_type === "WING_BAND")
+    return wingBand?.id_value || ""
+  }
+
   const getAgeInDays = (hatchDate: string) => {
     return Math.floor((Date.now() - new Date(hatchDate).getTime()) / (1000 * 60 * 60 * 24))
   }
 
-  const formatAgeShort = (hatchDate: string) => {
-    const days = getAgeInDays(hatchDate)
-    if (days < 0) return "-"
-    if (days < 30) return `${days}d`
-    if (days < 365) return `${Math.floor(days / 30)}mo`
-    const years = Math.floor(days / 365)
-    const months = Math.floor((days % 365) / 30)
-    return months > 0 ? `${years}y${months}m` : `${years}y`
+  const formatHatchDate = (hatchDate: string) => {
+    const date = new Date(hatchDate)
+    if (isNaN(date.getTime())) return "-"
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const year = date.getFullYear()
+    return `${month}/${year}`
   }
 
   const formatBreedComposition = (composition: Array<{ breedId: string; percentage: number }> | null) => {
@@ -241,6 +255,10 @@ function BirdsPageContent() {
       const search = columnFilters.band.toLowerCase()
       result = result.filter((b) => getBandNumber(b).toLowerCase().includes(search))
     }
+    if (columnFilters.wingTag) {
+      const search = columnFilters.wingTag.toLowerCase()
+      result = result.filter((b) => getWingTag(b).toLowerCase().includes(search))
+    }
     if (columnFilters.name) {
       const search = columnFilters.name.toLowerCase()
       result = result.filter((b) => (b.name || "").toLowerCase().includes(search))
@@ -262,7 +280,12 @@ function BirdsPageContent() {
       result = result.filter((b) => b.coop_id === columnFilters.coop)
     }
     if (columnFilters.status) {
-      result = result.filter((b) => b.status === columnFilters.status)
+      if (columnFilters.status === "IN_STOCK") {
+        // Show only active and breeding birds (birds still in inventory)
+        result = result.filter((b) => b.status === "ACTIVE" || b.status === "BREEDING")
+      } else {
+        result = result.filter((b) => b.status === columnFilters.status)
+      }
     }
     if (columnFilters.breed) {
       const search = columnFilters.breed.toLowerCase()
@@ -276,6 +299,9 @@ function BirdsPageContent() {
         switch (sortColumn) {
           case "band":
             comparison = getBandNumber(a).localeCompare(getBandNumber(b))
+            break
+          case "wingTag":
+            comparison = getWingTag(a).localeCompare(getWingTag(b))
             break
           case "name":
             comparison = (a.name || "").localeCompare(b.name || "")
@@ -312,8 +338,21 @@ function BirdsPageContent() {
     return result
   }, [birds, columnFilters, sortColumn, sortDirection, breeds])
 
+  // Paginated results
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedBirds.length / pageSize))
+  const paginatedBirds = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize
+    return filteredAndSortedBirds.slice(startIndex, startIndex + pageSize)
+  }, [filteredAndSortedBirds, currentPage, pageSize])
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [columnFilters, sortColumn, sortDirection, pageSize])
+
   const clearAllFilters = () => {
-    setColumnFilters(initialColumnFilters)
+    setColumnFilters(initialColumnFilters) // Resets to default with IN_STOCK status
+    setCurrentPage(1)
   }
 
   const getSexRowColor = (sex: string) => {
@@ -371,7 +410,14 @@ function BirdsPageContent() {
             {t("bird.title")}
           </h1>
           <p className="text-muted-foreground mt-1">
-            {formatNumber(filteredAndSortedBirds.length)} of {formatNumber(birds.length)} {t("bird.title").toLowerCase()}
+            {filteredAndSortedBirds.length > 0 ? (
+              <>
+                Showing {formatNumber((currentPage - 1) * pageSize + 1)}-{formatNumber(Math.min(currentPage * pageSize, filteredAndSortedBirds.length))} of {formatNumber(filteredAndSortedBirds.length)}
+                {filteredAndSortedBirds.length !== birds.length && ` (${formatNumber(birds.length)} total)`}
+              </>
+            ) : (
+              `0 of ${formatNumber(birds.length)} ${t("bird.title").toLowerCase()}`
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -461,9 +507,10 @@ function BirdsPageContent() {
                 {/* Sortable Headers */}
                 <tr className="bg-orange-50 border-b border-orange-100">
                   <SortableHeader column="band">Band #</SortableHeader>
+                  <SortableHeader column="wingTag">Wingband Color</SortableHeader>
                   <SortableHeader column="name">Name</SortableHeader>
                   <SortableHeader column="sex">Sex</SortableHeader>
-                  <SortableHeader column="age">Age</SortableHeader>
+                  <SortableHeader column="age">Hatch</SortableHeader>
                   <SortableHeader column="breed">Breed %</SortableHeader>
                   <SortableHeader column="sire">Sire</SortableHeader>
                   <SortableHeader column="dam">Dam</SortableHeader>
@@ -482,6 +529,15 @@ function BirdsPageContent() {
                         placeholder="Filter..."
                         value={columnFilters.band}
                         onChange={(e) => setColumnFilters({ ...columnFilters, band: e.target.value })}
+                        className="h-8 text-xs rounded-lg border-orange-200"
+                      />
+                    </td>
+                    {/* Wing Tag filter */}
+                    <td className="py-2 px-2">
+                      <Input
+                        placeholder="Filter..."
+                        value={columnFilters.wingTag}
+                        onChange={(e) => setColumnFilters({ ...columnFilters, wingTag: e.target.value })}
                         className="h-8 text-xs rounded-lg border-orange-200"
                       />
                     </td>
@@ -590,10 +646,11 @@ function BirdsPageContent() {
                         value={columnFilters.status || "all"}
                         onValueChange={(v) => setColumnFilters({ ...columnFilters, status: v === "all" ? "" : v })}
                       >
-                        <SelectTrigger className="h-8 text-xs rounded-lg border-orange-200 w-24">
+                        <SelectTrigger className="h-8 text-xs rounded-lg border-orange-200 w-28">
                           <SelectValue placeholder="All" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="IN_STOCK">In Stock</SelectItem>
                           <SelectItem value="all">All</SelectItem>
                           {STATUS_OPTIONS.map((s) => (
                             <SelectItem key={s} value={s}>{s}</SelectItem>
@@ -606,14 +663,14 @@ function BirdsPageContent() {
                 )}
               </thead>
               <tbody>
-                {filteredAndSortedBirds.length === 0 ? (
+                {paginatedBirds.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="py-8 text-center text-gray-500">
+                    <td colSpan={12} className="py-8 text-center text-gray-500">
                       No birds match your filters
                     </td>
                   </tr>
                 ) : (
-                  filteredAndSortedBirds.map((bird) => (
+                  paginatedBirds.map((bird) => (
                     <tr
                       key={bird.id}
                       onClick={() => window.location.href = `/birds/${bird.id}`}
@@ -625,6 +682,9 @@ function BirdsPageContent() {
                       <td className="py-2.5 px-3 font-mono text-xs whitespace-nowrap">
                         {getBandNumber(bird) || "-"}
                       </td>
+                      <td className="py-2.5 px-3 font-mono text-xs whitespace-nowrap">
+                        {getWingTag(bird) || "-"}
+                      </td>
                       <td className="py-2.5 px-3 font-medium text-gray-800 whitespace-nowrap max-w-[120px] truncate">
                         {bird.name || "-"}
                       </td>
@@ -634,7 +694,7 @@ function BirdsPageContent() {
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap">
-                        {formatAgeShort(bird.hatch_date)}
+                        {formatHatchDate(bird.hatch_date)}
                       </td>
                       <td className="py-2.5 px-3 text-gray-600 whitespace-nowrap max-w-[150px] truncate" title={formatBreedComposition(bird.breed_composition)}>
                         {formatBreedComposition(bird.breed_composition)}
@@ -665,6 +725,75 @@ function BirdsPageContent() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {filteredAndSortedBirds.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-t border-orange-100 bg-orange-50/50">
+              {/* Page size selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Show</span>
+                <Select
+                  value={pageSize.toString()}
+                  onValueChange={(v) => setPageSize(Number(v))}
+                >
+                  <SelectTrigger className="h-9 w-20 rounded-lg border-orange-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((size) => (
+                      <SelectItem key={size} value={size.toString()}>
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-sm text-gray-600">per page</span>
+              </div>
+
+              {/* Page navigation */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="h-9 px-3 rounded-lg border-orange-200 disabled:opacity-50"
+                >
+                  First
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="h-9 px-3 rounded-lg border-orange-200 disabled:opacity-50"
+                >
+                  Previous
+                </Button>
+                <span className="text-sm text-gray-600 px-3">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="h-9 px-3 rounded-lg border-orange-200 disabled:opacity-50"
+                >
+                  Next
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="h-9 px-3 rounded-lg border-orange-200 disabled:opacity-50"
+                >
+                  Last
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
